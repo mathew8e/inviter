@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "FB Auto Inviter",
+  "version": "1.0",
+  "description": "Invites people who reacted to posts to follow your page.",
+  "permissions": ["activeTab", "scripting"],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
