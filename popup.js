@@ -14,7 +14,7 @@ async function autoInviteAction() {
     );
     if (buttons.length === 0) {
         alert(
-            "No 'pozvat' buttons found. Make sure the reaction list is open!"
+            "Nebyly nalezeny žádné tlačítka 'Pozvat'. Ujistěte se, že je seznam reakcí otevřený!"
         );
         return;
     }
@@ -38,20 +38,21 @@ async function autoInviteAction() {
 
         // Click the button if still in DOM
         if (!document.contains(btn)) {
-            console.warn(
-                `Button #${index + 1} is no longer in the DOM, skipping.`
-            );
+            console.warn(`Tlačítko č. ${index + 1} už není v DOM, přeskočeno.`);
             continue;
         }
 
         try {
             btn.click();
             count++;
-            console.log(`Invited person #${index + 1}`);
+            console.log(`Pozváno: osoba č. ${index + 1}`);
         } catch (e) {
-            console.error(`Failed to click button #${index + 1}`, e);
+            console.error(
+                `Nepodařilo se kliknout na tlačítko č. ${index + 1}`,
+                e
+            );
         }
     }
 
-    alert(`Finished. Invited ${count} people.`);
+    alert(`Hotovo. Pozváno ${count} osob.`);
 }
