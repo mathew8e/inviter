@@ -72,9 +72,6 @@ if (!startBtn) {
                 },
             });
 
-            // Update UI state
-            startBtn.disabled = true;
-            if (stopBtn) stopBtn.disabled = false;
             if (statusEl) statusEl.textContent = "Inviting started...";
 
             // Run the long-running function (will resolve when finished or stopped)
@@ -90,8 +87,8 @@ if (!startBtn) {
             if (statusEl)
                 statusEl.textContent = "Error: " + (err && err.message);
         } finally {
-            startBtn.disabled = false;
-            if (stopBtn) stopBtn.disabled = true;
+            // Ensure the state is updated even if the script fails
+            chrome.runtime.sendMessage({ type: "STOP" });
         }
     });
 
