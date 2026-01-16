@@ -1,4 +1,3 @@
-
 const statusEl = document.getElementById("status");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -35,6 +34,35 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
     }
 });
 
+// Listen for messages from the content script
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === "UPDATE_COUNT") {
+        const invitedCountEl = document.getElementById("invitedCount");
+        const estimatedTimeEl = document.getElementById("estimatedTime");
+        const delay = parseFloat(document.getElementById("delay").value || "3.5");
+
+        if (invitedCountEl) {
+            invitedCountEl.textContent = request.count;
+        }
+        if (estimatedTimeEl) {
+            const remaining = request.total - request.count;
+            const timeInSeconds = remaining * delay;
+            const minutes = Math.floor(timeInSeconds / 60);
+            const seconds = Math.floor(timeInSeconds % 60);
+            estimatedTimeEl.textContent = `${minutes}m ${seconds}s`;
+        }
+    }
+});
+
+// Update delay value display
+const delaySlider = document.getElementById("delay");
+const delayValueEl = document.getElementById("delayValue");
+if (delaySlider && delayValueEl) {
+    delaySlider.addEventListener("input", (e) => {
+        delayValueEl.textContent = e.target.value;
+    });
+}
+
 if (!startBtn) {
     console.error("startBtn element not found in popup");
 } else {
@@ -55,12 +83,30 @@ if (!startBtn) {
             return;
         }
 
-        // Read input value from the popup DOM and pass it into the page function
+        // Read input values from the popup DOM
         const inputValue =
             (document.getElementById("string") &&
                 document.getElementById("string").value) ||
             "";
-        console.log("Start clicked, input:", inputValue);
+        const delay =
+            (document.getElementById("delay") &&
+                document.getElementById("delay").value) ||
+            "3.5";
+        const limit =
+            (document.getElementById("limit") &&
+                document.getElementById("limit").value) ||
+            "100";
+        const pauseAfter =
+            (document.getElementById("pauseAfter") &&
+                document.getElementById("pauseAfter").value) ||
+            "20";
+
+        console.log("Start clicked, input:", {
+            inputValue,
+            delay,
+            limit,
+            pauseAfter,
+        });
 
         try {
             // Clear stop flag and mark running on the page
@@ -72,13 +118,13 @@ if (!startBtn) {
                 },
             });
 
-            if (statusEl) statusEl.textContent = "Inviting started...";
+            if (statusEl) statusEl.textContent = "Spouštím pozvánky...";
 
             // Run the long-running function (will resolve when finished or stopped)
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: autoInviteAction,
-                args: [inputValue],
+                args: [inputValue, delay, limit, pauseAfter],
             });
             console.log("Content script finished");
             if (statusEl) statusEl.textContent = "Finished";
@@ -127,7 +173,7 @@ if (!startBtn) {
 }
 
 // This function runs INSIDE the Facebook page
-async function autoInviteAction(inputString) {
+async function autoInviteAction(inputString, delay, limit, pauseAfter) {
     // inputString is passed from the popup (can't access popup DOM from the page)
     const string = (inputString || "") + "";
     console.log(`running with ${string}`);
@@ -166,6 +212,10 @@ async function autoInviteAction(inputString) {
     window.__inviter_running = true;
 
     let count = 0;
+    const maxInvites = parseInt(limit, 10);
+    const pauseAfterInvites = parseInt(pauseAfter, 10);
+    const delaySeconds = parseFloat(delay);
+
     for (let index = 0; index < buttons.length; index++) {
         // Check stop flag before each iteration
         if (window.__inviter_stop) {
@@ -173,11 +223,16 @@ async function autoInviteAction(inputString) {
             break;
         }
 
+        if (count >= maxInvites) {
+            console.log("Invite limit reached");
+            break;
+        }
+
         const btn = buttons[index];
 
-        // Random delay 2-5s before action
-        const delay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
-        await new Promise((res) => setTimeout(res, delay));
+        // Random delay
+        const randomDelay = Math.floor(Math.random() * (delaySeconds * 1000 - 2000 + 1)) + 2000;
+        await new Promise((res) => setTimeout(res, randomDelay));
 
         // Check stop flag again after delay
         if (window.__inviter_stop) {
@@ -203,12 +258,18 @@ async function autoInviteAction(inputString) {
         try {
             btn.click();
             count++;
+            chrome.runtime.sendMessage({ type: "UPDATE_COUNT", count: count, total: buttons.length });
             console.log(`Pozváno: osoba č. ${index + 1}`);
         } catch (e) {
             console.error(
                 `Nepodařilo se kliknout na tlačítko č. ${index + 1}`,
                 e
             );
+        }
+
+        if (count > 0 && count % pauseAfterInvites === 0) {
+            console.log(`Pausing for a bit after ${count} invites...`);
+            await new Promise((res) => setTimeout(res, 30000)); // 30-second pause
         }
     }
 
