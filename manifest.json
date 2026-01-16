@@ -3,7 +3,10 @@
   "name": "FB Auto Inviter",
   "version": "1.0",
   "description": "Pozve lidi po tom co otevřeš okno s likama. Mathew Bosak",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

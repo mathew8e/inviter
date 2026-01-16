@@ -1,6 +1,10 @@
 console.log("popup.js loaded");
 const statusEl = document.getElementById("status");
-if (statusEl) statusEl.textContent = "Ready";
+let isRunning = false;
+chrome.runtime.sendMessage({ type: "GET_STATE" }, (response) => {
+    if (statusEl) statusEl.textContent = response.isRunning;
+    isRunning = response.isRunning;
+});
 
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -13,6 +17,8 @@ if (!startBtn) {
         console.log("Start button clicked");
         // Immediate visual feedback so clicks are noticeable without opening devtools
         if (statusEl) statusEl.textContent = "Start clicked...";
+
+        chrome.runtime.sendMessage({ type: "START" });
 
         let [tab] = await chrome.tabs.query({
             active: true,
@@ -41,7 +47,7 @@ if (!startBtn) {
                 },
             });
 
-            // Update UI state
+            // Update UI state - DISABLE START BUTTON
             startBtn.disabled = true;
             if (stopBtn) stopBtn.disabled = false;
             if (statusEl) statusEl.textContent = "Inviting started...";
@@ -59,6 +65,7 @@ if (!startBtn) {
             if (statusEl)
                 statusEl.textContent = "Error: " + (err && err.message);
         } finally {
+            // RE-ENABLE START BUTTON WHEN DONE
             startBtn.disabled = false;
             if (stopBtn) stopBtn.disabled = true;
         }
@@ -92,99 +99,101 @@ if (!startBtn) {
             }
         });
     }
-}
 
-// This function runs INSIDE the Facebook page
-async function autoInviteAction(inputString) {
-    // inputString is passed from the popup (can't access popup DOM from the page)
-    const string = (inputString || "") + "";
-    console.log(`running with ${string}`);
+    // This function runs INSIDE the Facebook page
+    async function autoInviteAction(inputString) {
+        // inputString is passed from the popup (can't access popup DOM from the page)
+        const string = (inputString || "") + "";
+        console.log(`running with ${string}`);
 
-    const searchText = string.trim().toLowerCase();
-    if (!searchText) {
-        alert("Prosím zadejte text, který chcete vyhledat.");
-        return;
-    }
+        const searchText = string.trim().toLowerCase();
+        if (!searchText) {
+            alert("Prosím zadejte text, který chcete vyhledat.");
+            return;
+        }
 
-    // Find buttons that contain at least one div whose text matches the search string (recursive by using querySelectorAll on divs)
-    const buttons = Array.from(document.querySelectorAll("button")).filter(
-        (btn) => {
-            const divs = btn.querySelectorAll("div");
-            for (const d of divs) {
-                if (
-                    d.textContent &&
-                    d.textContent.toLowerCase().includes(searchText)
-                )
-                    return true;
+        // Find buttons that contain at least one div whose text matches the search string (recursive by using querySelectorAll on divs)
+        const buttons = Array.from(document.querySelectorAll("div")).filter(
+            (btn) => {
+                const divs = btn.querySelectorAll("div");
+                for (const d of divs) {
+                    if (
+                        d.textContent &&
+                        d.textContent.toLowerCase().includes(searchText)
+                    )
+                        return true;
+                }
+                return false;
             }
-            return false;
-        }
-    );
-
-    if (buttons.length === 0) {
-        alert(
-            `Nebyly nalezeny žádné tlačítka '${string}'. Ujistěte se, že je seznam reakcí otevřený!`
         );
-        return;
-    }
 
-    // Ensure the stop flag exists
-    if (typeof window.__inviter_stop === "undefined")
-        window.__inviter_stop = false;
-    window.__inviter_running = true;
-
-    let count = 0;
-    for (let index = 0; index < buttons.length; index++) {
-        // Check stop flag before each iteration
-        if (window.__inviter_stop) {
-            console.log("Inviter stopped by user");
-            break;
-        }
-
-        const btn = buttons[index];
-
-        // Random delay 2-5s before action
-        const delay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
-        await new Promise((res) => setTimeout(res, delay));
-
-        // Check stop flag again after delay
-        if (window.__inviter_stop) {
-            console.log("Inviter stopped by user (post-delay)");
-            break;
-        }
-
-        // Scroll the button into view
-        try {
-            btn.scrollIntoView({ behavior: "smooth", block: "center" });
-            // Give browser time to finish scrolling
-            await new Promise((res) => setTimeout(res, 500));
-        } catch (e) {
-            // ignore
-        }
-
-        // Click the button if still in DOM
-        if (!document.contains(btn)) {
-            console.warn(`Tlačítko č. ${index + 1} už není v DOM, přeskočeno.`);
-            continue;
-        }
-
-        try {
-            btn.click();
-            count++;
-            console.log(`Pozváno: osoba č. ${index + 1}`);
-        } catch (e) {
-            console.error(
-                `Nepodařilo se kliknout na tlačítko č. ${index + 1}`,
-                e
+        if (buttons.length === 0) {
+            alert(
+                `Nebyly nalezeny žádné tlačítka '${string}'. Ujistěte se, že je seznam reakcí otevřený!`
             );
+            return;
         }
-    }
 
-    window.__inviter_running = false;
+        // Ensure the stop flag exists
+        if (typeof window.__inviter_stop === "undefined")
+            window.__inviter_stop = false;
+        window.__inviter_running = true;
 
-    if (window.__inviter_stop) {
-        alert(`Zastaveno uživatelem. Pozváno ${count} osob.`);
-    } else {
-        alert(`Hotovo. Pozváno ${count} osob.`);
+        let count = 0;
+        for (let index = 0; index < buttons.length; index++) {
+            // Check stop flag before each iteration
+            if (window.__inviter_stop) {
+                console.log("Inviter stopped by user");
+                break;
+            }
+
+            const btn = buttons[index];
+
+            // Random delay 2-5s before action
+            const delay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
+            await new Promise((res) => setTimeout(res, delay));
+
+            // Check stop flag again after delay
+            if (window.__inviter_stop) {
+                console.log("Inviter stopped by user (post-delay)");
+                break;
+            }
+
+            // Scroll the button into view
+            try {
+                btn.scrollIntoView({ behavior: "smooth", block: "center" });
+                // Give browser time to finish scrolling
+                await new Promise((res) => setTimeout(res, 500));
+            } catch (e) {
+                // ignore
+            }
+
+            // Click the button if still in DOM
+            if (!document.contains(btn)) {
+                console.warn(
+                    `Tlačítko č. ${index + 1} už není v DOM, přeskočeno.`
+                );
+                continue;
+            }
+
+            try {
+                btn.click();
+                count++;
+                console.log(`Pozváno: osoba č. ${index + 1}`);
+            } catch (e) {
+                console.error(
+                    `Nepodařilo se kliknout na tlačítko č. ${index + 1}`,
+                    e
+                );
+            }
+        }
+
+        window.__inviter_running = false;
+
+        if (window.__inviter_stop) {
+            alert(`Zastaveno uživatelem. Pozváno ${count} osob.`);
+        } else {
+            alert(`Hotovo. Pozváno ${count} osob.`);
+        }
     }
 }
