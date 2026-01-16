@@ -39,7 +39,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "UPDATE_COUNT") {
         const invitedCountEl = document.getElementById("invitedCount");
         const estimatedTimeEl = document.getElementById("estimatedTime");
-        const delay = parseFloat(document.getElementById("delay").value || "3.5");
+        const delay = parseFloat(
+            document.getElementById("delay").value || "3.5"
+        );
 
         if (invitedCountEl) {
             invitedCountEl.textContent = request.count;
@@ -174,34 +176,53 @@ if (!startBtn) {
 
 // This function runs INSIDE the Facebook page
 async function autoInviteAction(inputString, delay, limit, pauseAfter) {
-    // inputString is passed from the popup (can't access popup DOM from the page)
-    const string = (inputString || "") + "";
-    console.log(`running with ${string}`);
+    // How to find a good selector:
+    // 1. Right-click the "Invite" button on Facebook and select "Inspect".
+    // 2. Look for a unique and stable attribute on the button element or its parent.
+    //    - Good: `aria-label`, `data-testid`
+    //    - Okay: `class` (if it's not generated randomly)
+    //    - Bad: `id` (often randomly generated)
+    // 3. Create a CSS selector based on the attribute.
+    //    - Example: `div[aria-label="Pozvat"]`
+    // 4. Add the selector to the `selectors` array below, in order of preference.
+    const selectors = [
+        // PREFERRED: Find a selector that is specific and unlikely to change.
+        // Good examples:
+        // 'div[aria-label^="Pozvat"][role="button"]',
+        // 'div[data-testid="invite_button"]',
 
-    const searchText = string.trim().toLowerCase();
-    if (!searchText) {
-        alert("Prosím zadejte text, který chcete vyhledat.");
-        return;
+        // FALLBACK: If the text changes, you might need to update this.
+        `div[role="button"] span:containing("${inputString}")`, // This is a placeholder, :containing is not standard CSS
+    ];
+
+    let buttons = [];
+    for (const selector of selectors) {
+        try {
+            // Note: :containing is a jQuery selector, not standard CSS.
+            // We're keeping the text-based search as a fallback.
+            if (selector.includes(':containing')) {
+                const searchText = inputString.trim().toLowerCase();
+                buttons = Array.from(document.querySelectorAll("div[role='button']")).filter(btn => {
+                    const buttonText = btn.textContent.trim().toLowerCase();
+                    return buttonText.includes(searchText);
+                });
+            } else {
+                buttons = Array.from(document.querySelectorAll(selector));
+            }
+
+            if (buttons.length > 0) {
+                console.log(`Found ${buttons.length} buttons with selector: ${selector}`);
+                break;
+            }
+        } catch (error) {
+            console.warn(`Selector "${selector}" failed:`, error);
+        }
     }
 
-    // Find buttons that contain at least one div whose text matches the search string (recursive by using querySelectorAll on divs)
-    const buttons = Array.from(document.querySelectorAll("div")).filter(
-        (btn) => {
-            const divs = btn.querySelectorAll("div");
-            for (const d of divs) {
-                if (
-                    d.textContent &&
-                    d.textContent.toLowerCase().includes(searchText)
-                )
-                    return true;
-            }
-            return false;
-        }
-    );
 
     if (buttons.length === 0) {
         alert(
-            `Nebyly nalezeny žádné tlačítka '${string}'. Ujistěte se, že je seznam reakcí otevřený!`
+            `Nebyly nalezeny žádné tlačítka. Zkuste upravit selektory v souboru popup.js.`
         );
         return;
     }
