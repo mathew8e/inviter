@@ -187,38 +187,33 @@ async function autoInviteAction(inputString, delay, limit, pauseAfter) {
     // 4. Add the selector to the `selectors` array below, in order of preference.
     const selectors = [
         // PREFERRED: Find a selector that is specific and unlikely to change.
-        // Good examples:
-        // 'div[aria-label^="Pozvat"][role="button"]',
-        // 'div[data-testid="invite_button"]',
+        'div[aria-label="Pozvat"][role="button"]',
+        'div[aria-label^="Pozvat"][role="button"]',
 
         // FALLBACK: If the text changes, you might need to update this.
-        `div[role="button"] span:containing("${inputString}")`, // This is a placeholder, :containing is not standard CSS
+        `div[role="button"]`,
     ];
 
     let buttons = [];
     for (const selector of selectors) {
         try {
-            // Note: :containing is a jQuery selector, not standard CSS.
-            // We're keeping the text-based search as a fallback.
-            if (selector.includes(':containing')) {
+            const allButtons = Array.from(document.querySelectorAll(selector));
+            if (allButtons.length > 0) {
                 const searchText = inputString.trim().toLowerCase();
-                buttons = Array.from(document.querySelectorAll("div[role='button']")).filter(btn => {
+                buttons = allButtons.filter(btn => {
                     const buttonText = btn.textContent.trim().toLowerCase();
-                    return buttonText.includes(searchText);
+                    return buttonText === searchText;
                 });
-            } else {
-                buttons = Array.from(document.querySelectorAll(selector));
-            }
 
-            if (buttons.length > 0) {
-                console.log(`Found ${buttons.length} buttons with selector: ${selector}`);
-                break;
+                if (buttons.length > 0) {
+                    console.log(`Found ${buttons.length} buttons with selector: ${selector} and text: "${inputString}"`);
+                    break;
+                }
             }
         } catch (error) {
             console.warn(`Selector "${selector}" failed:`, error);
         }
     }
-
 
     if (buttons.length === 0) {
         alert(
@@ -252,7 +247,8 @@ async function autoInviteAction(inputString, delay, limit, pauseAfter) {
         const btn = buttons[index];
 
         // Random delay
-        const randomDelay = Math.floor(Math.random() * (delaySeconds * 1000 - 2000 + 1)) + 2000;
+        const randomDelay =
+            Math.floor(Math.random() * (delaySeconds * 1000 - 2000 + 1)) + 2000;
         await new Promise((res) => setTimeout(res, randomDelay));
 
         // Check stop flag again after delay
@@ -278,8 +274,13 @@ async function autoInviteAction(inputString, delay, limit, pauseAfter) {
 
         try {
             btn.click();
+            btn.style.backgroundColor = "green";
             count++;
-            chrome.runtime.sendMessage({ type: "UPDATE_COUNT", count: count, total: buttons.length });
+            chrome.runtime.sendMessage({
+                type: "UPDATE_COUNT",
+                count: count,
+                total: buttons.length,
+            });
             console.log(`Pozváno: osoba č. ${index + 1}`);
         } catch (e) {
             console.error(
