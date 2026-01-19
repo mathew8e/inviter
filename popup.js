@@ -142,36 +142,39 @@ if (!startBtn) {
 
     // Stop button
     if (stopBtn) {
-        stopBtn.addEventListener("click", async () => {
-            console.log("Stop button clicked");
-            if (statusEl) statusEl.textContent = "Stop requested...";
-
-            // Send STOP message to background script to update the running state
-            chrome.runtime.sendMessage({ type: "STOP" });
-
-            let [tab] = await chrome.tabs.query({
-                active: true,
-                currentWindow: true,
-            });
-            if (!tab || !tab.id) {
-                console.error("No active tab found to set stop flag");
-                if (statusEl) statusEl.textContent = "No active tab to stop on";
-                return;
-            }
-            try {
-                await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    func: () => {
-                        window.__inviter_stop = true;
-                    },
-                });
-                console.log("Stop signal sent to page");
-                if (statusEl) statusEl.textContent = "Stopping...";
-            } catch (err) {
-                console.error("Failed setting stop flag", err);
-            }
-        });
+        stopAction();
     }
+}
+function stopAction() {
+    stopBtn.addEventListener("click", async () => {
+        console.log("Stop button clicked");
+        if (statusEl) statusEl.textContent = "Stop requested...";
+
+        // Send STOP message to background script to update the running state
+        chrome.runtime.sendMessage({ type: "STOP" });
+
+        let [tab] = await chrome.tabs.query({
+            active: true,
+            currentWindow: true,
+        });
+        if (!tab || !tab.id) {
+            console.error("No active tab found to set stop flag");
+            if (statusEl) statusEl.textContent = "No active tab to stop on";
+            return;
+        }
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: () => {
+                    window.__inviter_stop = true;
+                },
+            });
+            console.log("Stop signal sent to page");
+            if (statusEl) statusEl.textContent = "Stopping...";
+        } catch (err) {
+            console.error("Failed setting stop flag", err);
+        }
+    });
 }
 
 // This function runs INSIDE the Facebook page
@@ -200,13 +203,15 @@ async function autoInviteAction(inputString, delay, limit, pauseAfter) {
             const allButtons = Array.from(document.querySelectorAll(selector));
             if (allButtons.length > 0) {
                 const searchText = inputString.trim().toLowerCase();
-                buttons = allButtons.filter(btn => {
+                buttons = allButtons.filter((btn) => {
                     const buttonText = btn.textContent.trim().toLowerCase();
                     return buttonText === searchText;
                 });
 
                 if (buttons.length > 0) {
-                    console.log(`Found ${buttons.length} buttons with selector: ${selector} and text: "${inputString}"`);
+                    console.log(
+                        `Found ${buttons.length} buttons with selector: ${selector} and text: "${inputString}"`
+                    );
                     break;
                 }
             }
@@ -298,7 +303,7 @@ async function autoInviteAction(inputString, delay, limit, pauseAfter) {
     window.__inviter_running = false;
 
     if (window.__inviter_stop) {
-        alert(`Zastaveno uživatelem. Pozváno ${count} osob.`);
+        console.log(`Zastaveno uživatelem. Pozváno ${count} osob.`);
     } else {
         alert(`Hotovo. Pozváno ${count} osob.`);
     }
