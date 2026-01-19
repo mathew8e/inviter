@@ -53,6 +53,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const seconds = Math.floor(timeInSeconds % 60);
             estimatedTimeEl.textContent = `${minutes}m ${seconds}s`;
         }
+    } else if (request.type === "NO_BUTTONS_FOUND") {
+        if (statusEl) {
+            statusEl.innerHTML = `No buttons found. Please check the selectors in <code>popup.js</code>. <br>Mode: ${
+                request.isMobile ? "Mobile" : "Desktop"
+            }`;
+        }
+    } else if (request.type === "FINISHED") {
+        if (statusEl) {
+            const message = request.stopped
+                ? `Stopped by user. Invited ${request.count} people.`
+                : `Finished. Invited ${request.count} people.`;
+            statusEl.textContent = message;
+        }
+        chrome.runtime.sendMessage({ type: "STOP" });
     }
 });
 
@@ -70,7 +84,6 @@ if (!startBtn) {
 } else {
     startBtn.addEventListener("click", async () => {
         console.log("Start button clicked");
-        // Immediate visual feedback so clicks are noticeable without opening devtools
         if (statusEl) statusEl.textContent = "Start clicked...";
 
         chrome.runtime.sendMessage({ type: "START" });
@@ -85,33 +98,26 @@ if (!startBtn) {
             return;
         }
 
-        // Read input values from the popup DOM
         const inputValue =
-            (document.getElementById("string") &&
-                document.getElementById("string").value) ||
-            "";
+            document.getElementById("string").value || "";
         const delay =
-            (document.getElementById("delay") &&
-                document.getElementById("delay").value) ||
-            "3.5";
+            document.getElementById("delay").value || "3.5";
         const limit =
-            (document.getElementById("limit") &&
-                document.getElementById("limit").value) ||
-            "100";
+            document.getElementById("limit").value || "100";
         const pauseAfter =
-            (document.getElementById("pauseAfter") &&
-                document.getElementById("pauseAfter").value) ||
-            "20";
+            document.getElementById("pauseAfter").value || "20";
+        const isMobile =
+            document.getElementById("mobileMode").checked;
 
         console.log("Start clicked, input:", {
             inputValue,
             delay,
             limit,
             pauseAfter,
+            isMobile,
         });
 
         try {
-            // Clear stop flag and mark running on the page
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: () => {
@@ -120,27 +126,21 @@ if (!startBtn) {
                 },
             });
 
-            if (statusEl) statusEl.textContent = "Spouštím pozvánky...";
+            if (statusEl) statusEl.textContent = "Running invites...";
 
-            // Run the long-running function (will resolve when finished or stopped)
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: autoInviteAction,
-                args: [inputValue, delay, limit, pauseAfter],
+                args: [inputValue, delay, limit, pauseAfter, isMobile],
             });
-            console.log("Content script finished");
-            if (statusEl) statusEl.textContent = "Finished";
         } catch (err) {
             console.error("executeScript failed:", err);
             if (statusEl)
                 statusEl.textContent = "Error: " + (err && err.message);
-        } finally {
-            // Ensure the state is updated even if the script fails
             chrome.runtime.sendMessage({ type: "STOP" });
         }
     });
 
-    // Stop button
     if (stopBtn) {
         stopAction();
     }
@@ -178,24 +178,40 @@ function stopAction() {
 }
 
 // This function runs INSIDE the Facebook page
-async function autoInviteAction(inputString, delay, limit, pauseAfter) {
+async function autoInviteAction(
+    inputString,
+    delay,
+    limit,
+    pauseAfter,
+    isMobile
+) {
     // How to find a good selector:
-    // 1. Right-click the "Invite" button on Facebook and select "Inspect".
+    // 1. On your browser, right-click the "Invite" button on Facebook and select "Inspect" or "Inspect Element".
     // 2. Look for a unique and stable attribute on the button element or its parent.
-    //    - Good: `aria-label`, `data-testid`
-    //    - Okay: `class` (if it's not generated randomly)
-    //    - Bad: `id` (often randomly generated)
+    //    - Good attributes: `aria-label`, `data-testid`
+    //    - Okay attributes: `class` (if it's not randomly generated)
+    //    - Bad attributes: `id` (often randomly generated on Facebook)
     // 3. Create a CSS selector based on the attribute.
-    //    - Example: `div[aria-label="Pozvat"]`
-    // 4. Add the selector to the `selectors` array below, in order of preference.
-    const selectors = [
-        // PREFERRED: Find a selector that is specific and unlikely to change.
+    //    - Example for desktop: `div[aria-label="Pozvat"]`
+    //    - Example for mobile: `button[data-testid="some-mobile-button"]`
+    // 4. Add the selector to the appropriate array below (desktopSelectors or mobileSelectors).
+
+    const desktopSelectors = [
         'div[aria-label="Pozvat"][role="button"]',
         'div[aria-label^="Pozvat"][role="button"]',
-
-        // FALLBACK: If the text changes, you might need to update this.
-        `div[role="button"]`,
+        `div[role="button"]`, // Fallback
     ];
+
+    const mobileSelectors = [
+        // !! IMPORTANT !!
+        // The selectors below are placeholders. You MUST find the correct selectors for the
+        // mobile version of Facebook and replace them here.
+        'button[data-testid="user-list-invite-button"]', // Example: Replace with a real selector
+        'div[data-mobile-role="invite-button"]', // Example: Replace with a real selector
+        'div[aria-label="Invite"]', // Example: Facebook might use English labels on mobile
+    ];
+
+    const selectors = isMobile ? mobileSelectors : desktopSelectors;
 
     let buttons = [];
     for (const selector of selectors) {
@@ -221,9 +237,11 @@ async function autoInviteAction(inputString, delay, limit, pauseAfter) {
     }
 
     if (buttons.length === 0) {
-        alert(
-            `Nebyly nalezeny žádné tlačítka. Zkuste upravit selektory v souboru popup.js.`
-        );
+        // Use chrome.runtime.sendMessage to communicate back to the popup
+        chrome.runtime.sendMessage({
+            type: "NO_BUTTONS_FOUND",
+            isMobile: isMobile,
+        });
         return;
     }
 
@@ -238,7 +256,6 @@ async function autoInviteAction(inputString, delay, limit, pauseAfter) {
     const delaySeconds = parseFloat(delay);
 
     for (let index = 0; index < buttons.length; index++) {
-        // Check stop flag before each iteration
         if (window.__inviter_stop) {
             console.log("Inviter stopped by user");
             break;
@@ -251,29 +268,24 @@ async function autoInviteAction(inputString, delay, limit, pauseAfter) {
 
         const btn = buttons[index];
 
-        // Random delay
         const randomDelay =
             Math.floor(Math.random() * (delaySeconds * 1000 - 2000 + 1)) + 2000;
         await new Promise((res) => setTimeout(res, randomDelay));
 
-        // Check stop flag again after delay
         if (window.__inviter_stop) {
             console.log("Inviter stopped by user (post-delay)");
             break;
         }
 
-        // Scroll the button into view
         try {
             btn.scrollIntoView({ behavior: "smooth", block: "center" });
-            // Give browser time to finish scrolling
             await new Promise((res) => setTimeout(res, 500));
         } catch (e) {
             // ignore
         }
 
-        // Click the button if still in DOM
         if (!document.contains(btn)) {
-            console.warn(`Tlačítko č. ${index + 1} už není v DOM, přeskočeno.`);
+            console.warn(`Button #${index + 1} is no longer in the DOM, skipping.`);
             continue;
         }
 
@@ -286,25 +298,23 @@ async function autoInviteAction(inputString, delay, limit, pauseAfter) {
                 count: count,
                 total: buttons.length,
             });
-            console.log(`Pozváno: osoba č. ${index + 1}`);
+            console.log(`Invited: person #${index + 1}`);
         } catch (e) {
-            console.error(
-                `Nepodařilo se kliknout na tlačítko č. ${index + 1}`,
-                e
-            );
+            console.error(`Failed to click button #${index + 1}`, e);
         }
 
         if (count > 0 && count % pauseAfterInvites === 0) {
             console.log(`Pausing for a bit after ${count} invites...`);
-            await new Promise((res) => setTimeout(res, 30000)); // 30-second pause
+            await new Promise((res) => setTimeout(res, 30000));
         }
     }
 
     window.__inviter_running = false;
 
-    if (window.__inviter_stop) {
-        console.log(`Zastaveno uživatelem. Pozváno ${count} osob.`);
-    } else {
-        alert(`Hotovo. Pozváno ${count} osob.`);
-    }
+    // Send a final message to the popup
+    chrome.runtime.sendMessage({
+        type: "FINISHED",
+        count: count,
+        stopped: window.__inviter_stop,
+    });
 }
