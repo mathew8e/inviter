@@ -53,6 +53,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const seconds = Math.floor(timeInSeconds % 60);
             estimatedTimeEl.textContent = `${minutes}m ${seconds}s`;
         }
+    } else if (request.type === "LOG") {
+        if (statusEl) {
+            statusEl.innerHTML = request.message;
+        }
     } else if (request.type === "NO_BUTTONS_FOUND") {
         if (statusEl) {
             statusEl.innerHTML = `No buttons found. Please check the selectors in <code>popup.js</code>. <br>Mode: ${
@@ -185,6 +189,7 @@ async function autoInviteAction(
     pauseAfter,
     isMobile
 ) {
+    chrome.runtime.sendMessage({ type: "LOG", message: "Script starting..." });
     // How to find a good selector:
     // 1. On your browser, right-click the "Invite" button on Facebook and select "Inspect" or "Inspect Element".
     // 2. Look for a unique and stable attribute on the button element or its parent.
@@ -207,11 +212,17 @@ async function autoInviteAction(
         // The selectors below are placeholders. You MUST find the correct selectors for the
         // mobile version of Facebook and replace them here.
         'button[data-testid="user-list-invite-button"]', // Example: Replace with a real selector
-        'div[data-mobile-role="invite-button"]', // Example: Replace with a real selector
-        'div[aria-label="Invite"]', // Example: Facebook might use English labels on mobile
+        'div[aria-label="Pozvat"]', // Czech "Invite"
+        'div[aria-label="Invite"]', // English "Invite"
+        'button', // A general fallback for any button
     ];
 
     const selectors = isMobile ? mobileSelectors : desktopSelectors;
+
+    chrome.runtime.sendMessage({
+        type: "LOG",
+        message: `Using ${isMobile ? "mobile" : "desktop"} selectors.`,
+    });
 
     let buttons = [];
     for (const selector of selectors) {
@@ -219,14 +230,23 @@ async function autoInviteAction(
             const allButtons = Array.from(document.querySelectorAll(selector));
             if (allButtons.length > 0) {
                 const searchText = inputString.trim().toLowerCase();
-                buttons = allButtons.filter((btn) => {
-                    const buttonText = btn.textContent.trim().toLowerCase();
-                    return buttonText === searchText;
-                });
+                // If searchText is empty, we don't filter by text, we take all buttons from the selector.
+                if (searchText) {
+                    buttons = allButtons.filter((btn) => {
+                        const buttonText = btn.textContent.trim().toLowerCase();
+                        return buttonText === searchText;
+                    });
+                } else {
+                    buttons = allButtons;
+                }
 
                 if (buttons.length > 0) {
+                    chrome.runtime.sendMessage({
+                        type: "LOG",
+                        message: `Found ${buttons.length} buttons with selector: ${selector}`,
+                    });
                     console.log(
-                        `Found ${buttons.length} buttons with selector: ${selector} and text: "${inputString}"`
+                        `Found ${buttons.length} buttons with selector: ${selector}`
                     );
                     break;
                 }
