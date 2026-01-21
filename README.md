@@ -19,6 +19,18 @@ document.querySelectorAll('div[aria-label="Pozvat"]');
 
 -   Pokud Facebook používá jiný jazyk, upravte text v selektoru (např. "Invite", "Pozvat").
 
+## Instalace v Orion Browseru (iOS)
+
+1.  **Stáhněte si ZIP archiv rozšíření.**
+    *   Navštivte [odkaz na stáhnutí ZIPu] (zde je potřeba doplnit odkaz na stažení zazipované verze rozšíření).
+2.  **Rozbalte stažený ZIP archiv.**
+    *   Tím získáte složku obsahující soubory rozšíření (např. `manifest.json`, `popup.js` atd.).
+3.  **Přidejte rozšíření do Orion Browseru:**
+    *   Otevřete Orion Browser na svém iOS zařízení.
+    *   Přejděte do nastavení rozšíření (obvykle přes menu -> "Extensions" nebo "Doplňky").
+    *   Vyhledejte možnost "Load unpacked extension" nebo "Načíst nerozbalené rozšíření".
+    *   Vyberte složku, kterou jste rozbalili v kroku 2.
+
 ## ❗ Upozornění
 
 -   Používejte zodpovědně a respektujte zásady Facebooku (Terms of Service).
