@@ -193,10 +193,42 @@ async function autoInviteAction(
     ];
 
     const selectors = isMobile ? mobileSelectors : desktopSelectors;
-    const scrollableElement = isMobile
-        ? document.body
-        : document.querySelector('div[role="dialog"] .scrollable-area') ||
-          document.body;
+
+    let scrollableElement = null;
+    if (!isMobile) {
+        // Try to find a dialog and then a scrollable element within it
+        const dialog = document.querySelector('div[role="dialog"]');
+        if (dialog) {
+            // Look for a scrollable descendant
+            const potentialScrollables = dialog.querySelectorAll('div, ul, ol');
+            for (const el of potentialScrollables) {
+                // Check if the element is actually scrollable
+                const computedStyle = getComputedStyle(el);
+                if (
+                    el.scrollHeight > el.clientHeight &&
+                    (computedStyle.overflowY === 'auto' || computedStyle.overflowY === 'scroll')
+                ) {
+                    scrollableElement = el;
+                    break;
+                }
+            }
+            // If no specific scrollable element found, try the dialog itself if it's scrollable
+            if (!scrollableElement) {
+                const computedStyle = getComputedStyle(dialog);
+                if (
+                    dialog.scrollHeight > dialog.clientHeight &&
+                    (computedStyle.overflowY === 'auto' || computedStyle.overflowY === 'scroll')
+                ) {
+                    scrollableElement = dialog;
+                }
+            }
+        }
+    }
+    // Fallback to body only if no specific scrollable element found in desktop mode or if in mobile mode
+    if (!scrollableElement) {
+        scrollableElement = document.body;
+    }
+
 
     chrome.runtime.sendMessage({
         type: "LOG",
@@ -213,11 +245,43 @@ async function autoInviteAction(
     const pauseAfterInvites = parseInt(pauseAfter, 10);
     const delaySeconds = parseFloat(delay);
 
-    let lastButtonCount = -1;
-    let currentButtonCount = 0;
+    // --- NEW PRE-SCROLLING LOGIC ---
+    chrome.runtime.sendMessage({
+        type: "LOG",
+        message: "Pre-scrolling to load all users..."
+    });
+    let lastScrollHeight = -1;
+    let currentScrollHeight = scrollableElement.scrollHeight;
+    let scrollAttempts = 0;
+    const MAX_SCROLL_ATTEMPTS = 20; // Prevent infinite loops, increased from 10
+
+    while (
+        lastScrollHeight !== currentScrollHeight &&
+        scrollAttempts < MAX_SCROLL_ATTEMPTS &&
+        !window.__inviter_stop
+    ) {
+        lastScrollHeight = currentScrollHeight;
+        scrollableElement.scrollTop = scrollableElement.scrollHeight;
+        await new Promise((res) => setTimeout(res, 1500)); // Wait for content to load
+        currentScrollHeight = scrollableElement.scrollHeight;
+        scrollAttempts++;
+        chrome.runtime.sendMessage({
+             type: "LOG",
+             message: `Scrolled. Current height: ${currentScrollHeight}. Attempt: ${scrollAttempts}`
+        });
+    }
+    chrome.runtime.sendMessage({
+        type: "LOG",
+        message: "Pre-scrolling complete. Starting invitation process."
+    });
+    // --- END NEW PRE-SCROLLING LOGIC ---
+
+
+    let lastButtonCount = -1; // This variable will now track total unique buttons found
+    let allButtonsFound = new Set(); // Use a Set to store unique buttons
 
     while (!window.__inviter_stop && count < maxInvites) {
-        let buttons = [];
+        let currentVisibleButtons = [];
         for (const selector of selectors) {
             const foundButtons = Array.from(
                 document.querySelectorAll(
@@ -227,36 +291,43 @@ async function autoInviteAction(
             if (foundButtons.length > 0) {
                 const searchText = inputString.trim().toLowerCase();
                 if (searchText) {
-                    buttons = foundButtons.filter(
+                    currentVisibleButtons = foundButtons.filter(
                         (btn) =>
                             btn.textContent.trim().toLowerCase() === searchText
                     );
                 } else {
-                    buttons = foundButtons;
+                    currentVisibleButtons = foundButtons;
                 }
 
-                if (buttons.length > 0) {
+                if (currentVisibleButtons.length > 0) {
+                    // Filter out buttons already in our Set of all found buttons
+                    const newButtons = currentVisibleButtons.filter(btn => !allButtonsFound.has(btn));
+                    newButtons.forEach(btn => allButtonsFound.add(btn));
+
                     chrome.runtime.sendMessage({
                         type: "LOG",
-                        message: `Found ${buttons.length} new buttons with selector: ${selector}`,
+                        message: `Found ${currentVisibleButtons.length} new buttons with selector: ${selector}. Total unique found: ${allButtonsFound.size}`,
                     });
                     break;
                 }
             }
         }
 
-        currentButtonCount = buttons.length;
-
-        if (buttons.length === 0 && lastButtonCount === 0) {
+        // If no new buttons were found in this pass, and we've already scrolled to the bottom
+        // (implied by the pre-scrolling), then we can assume we're done.
+        // The check buttons.length === 0 is now effectively replaced by the pre-scrolling
+        // and the fact that allButtonsFound will eventually stabilize.
+        if (currentVisibleButtons.length === 0 && allButtonsFound.size === (lastButtonCount === -1 ? 0 : lastButtonCount)) {
             chrome.runtime.sendMessage({
                 type: "LOG",
-                message: "No new people found, finishing.",
+                message: "No new buttons to process after pre-scrolling. Finishing.",
             });
             break;
         }
-        lastButtonCount = currentButtonCount;
 
-        for (const btn of buttons) {
+        lastButtonCount = allButtonsFound.size; // Update total count for next iteration check
+
+        for (const btn of currentVisibleButtons) { // Iterate over currently visible (and uninvited) buttons
             if (window.__inviter_stop || count >= maxInvites) {
                 break;
             }
@@ -302,16 +373,8 @@ async function autoInviteAction(
                 await new Promise((res) => setTimeout(res, 30000));
             }
         }
-
-        // Scroll to load more
-        if (!window.__inviter_stop && count < maxInvites) {
-            chrome.runtime.sendMessage({
-                type: "LOG",
-                message: "Scrolling to find more people...",
-            });
-            scrollableElement.scrollTop = scrollableElement.scrollHeight;
-            await new Promise((res) => setTimeout(res, 2500)); // Wait for content to load
-        }
+        // Removed the in-loop scrolling as pre-scrolling should handle initial load
+        // and we only process visible buttons after that.
     }
 
     window.__inviter_running = false;

@@ -6,7 +6,7 @@ Jednoduché doplňkové rozšíření, které prochází tlačítka "Pozvat" ve 
 
 1. Otevřete příspěvek na Facebooku a klikněte na počet reakcí, aby se otevřel seznam reakcí.
 2. Otevřete rozšíření (popup) a stiskněte tlačítko **Start**.
-3. Skript začne postupně zvat lidi a bude automaticky posouvat seznam dolů, dokud nedojde na konec.
+3. Skript nejprve automaticky posouvá seznam v okně s pozvánkami dolů, dokud nenačte všechny dostupné lidi. Poté začne postupně zvat lidi a klikat na tlačítka. Scrollování je omezeno pouze na okno s pozvánkami, nikoli na celou stránku.
 
 ## ⚙️ Konfigurace
 
