@@ -38,20 +38,8 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === "UPDATE_COUNT") {
         const invitedCountEl = document.getElementById("invitedCount");
-        const estimatedTimeEl = document.getElementById("estimatedTime");
-        const delay = parseFloat(
-            document.getElementById("delay").value || "3.5"
-        );
-
         if (invitedCountEl) {
             invitedCountEl.textContent = request.count;
-        }
-        if (estimatedTimeEl) {
-            const remaining = request.total - request.count;
-            const timeInSeconds = remaining * delay;
-            const minutes = Math.floor(timeInSeconds / 60);
-            const seconds = Math.floor(timeInSeconds % 60);
-            estimatedTimeEl.textContent = `${minutes}m ${seconds}s`;
         }
     } else if (request.type === "LOG") {
         if (statusEl) {
@@ -190,16 +178,6 @@ async function autoInviteAction(
     isMobile
 ) {
     chrome.runtime.sendMessage({ type: "LOG", message: "Script starting..." });
-    // How to find a good selector:
-    // 1. On your browser, right-click the "Invite" button on Facebook and select "Inspect" or "Inspect Element".
-    // 2. Look for a unique and stable attribute on the button element or its parent.
-    //    - Good attributes: `aria-label`, `data-testid`
-    //    - Okay attributes: `class` (if it's not randomly generated)
-    //    - Bad attributes: `id` (often randomly generated on Facebook)
-    // 3. Create a CSS selector based on the attribute.
-    //    - Example for desktop: `div[aria-label="Pozvat"]`
-    //    - Example for mobile: `button[data-testid="some-mobile-button"]`
-    // 4. Add the selector to the appropriate array below (desktopSelectors or mobileSelectors).
 
     const desktopSelectors = [
         'div[aria-label="Pozvat"][role="button"]',
@@ -208,66 +186,26 @@ async function autoInviteAction(
     ];
 
     const mobileSelectors = [
-        // !! IMPORTANT !!
-        // The selectors below are placeholders. You MUST find the correct selectors for the
-        // mobile version of Facebook and replace them here.
-        'button[data-testid="user-list-invite-button"]', // Example: Replace with a real selector
-        'div[aria-label="Pozvat"]', // Czech "Invite"
-        'div[aria-label="Invite"]', // English "Invite"
-        'button', // A general fallback for any button
+        'button[data-testid="user-list-invite-button"]',
+        'div[aria-label="Pozvat"]',
+        'div[aria-label="Invite"]',
+        'button',
     ];
 
     const selectors = isMobile ? mobileSelectors : desktopSelectors;
+    const scrollableElement = isMobile
+        ? document.body
+        : document.querySelector('div[role="dialog"] .scrollable-area') ||
+          document.body;
 
     chrome.runtime.sendMessage({
         type: "LOG",
         message: `Using ${isMobile ? "mobile" : "desktop"} selectors.`,
     });
 
-    let buttons = [];
-    for (const selector of selectors) {
-        try {
-            const allButtons = Array.from(document.querySelectorAll(selector));
-            if (allButtons.length > 0) {
-                const searchText = inputString.trim().toLowerCase();
-                // If searchText is empty, we don't filter by text, we take all buttons from the selector.
-                if (searchText) {
-                    buttons = allButtons.filter((btn) => {
-                        const buttonText = btn.textContent.trim().toLowerCase();
-                        return buttonText === searchText;
-                    });
-                } else {
-                    buttons = allButtons;
-                }
-
-                if (buttons.length > 0) {
-                    chrome.runtime.sendMessage({
-                        type: "LOG",
-                        message: `Found ${buttons.length} buttons with selector: ${selector}`,
-                    });
-                    console.log(
-                        `Found ${buttons.length} buttons with selector: ${selector}`
-                    );
-                    break;
-                }
-            }
-        } catch (error) {
-            console.warn(`Selector "${selector}" failed:`, error);
-        }
-    }
-
-    if (buttons.length === 0) {
-        // Use chrome.runtime.sendMessage to communicate back to the popup
-        chrome.runtime.sendMessage({
-            type: "NO_BUTTONS_FOUND",
-            isMobile: isMobile,
-        });
-        return;
-    }
-
-    // Ensure the stop flag exists
-    if (typeof window.__inviter_stop === "undefined")
+    if (typeof window.__inviter_stop === "undefined") {
         window.__inviter_stop = false;
+    }
     window.__inviter_running = true;
 
     let count = 0;
@@ -275,63 +213,109 @@ async function autoInviteAction(
     const pauseAfterInvites = parseInt(pauseAfter, 10);
     const delaySeconds = parseFloat(delay);
 
-    for (let index = 0; index < buttons.length; index++) {
-        if (window.__inviter_stop) {
-            console.log("Inviter stopped by user");
-            break;
+    let lastButtonCount = -1;
+    let currentButtonCount = 0;
+
+    while (!window.__inviter_stop && count < maxInvites) {
+        let buttons = [];
+        for (const selector of selectors) {
+            const foundButtons = Array.from(
+                document.querySelectorAll(
+                    `${selector}:not([data-invited="true"])`
+                )
+            );
+            if (foundButtons.length > 0) {
+                const searchText = inputString.trim().toLowerCase();
+                if (searchText) {
+                    buttons = foundButtons.filter(
+                        (btn) =>
+                            btn.textContent.trim().toLowerCase() === searchText
+                    );
+                } else {
+                    buttons = foundButtons;
+                }
+
+                if (buttons.length > 0) {
+                    chrome.runtime.sendMessage({
+                        type: "LOG",
+                        message: `Found ${buttons.length} new buttons with selector: ${selector}`,
+                    });
+                    break;
+                }
+            }
         }
 
-        if (count >= maxInvites) {
-            console.log("Invite limit reached");
-            break;
-        }
+        currentButtonCount = buttons.length;
 
-        const btn = buttons[index];
-
-        const randomDelay =
-            Math.floor(Math.random() * (delaySeconds * 1000 - 2000 + 1)) + 2000;
-        await new Promise((res) => setTimeout(res, randomDelay));
-
-        if (window.__inviter_stop) {
-            console.log("Inviter stopped by user (post-delay)");
-            break;
-        }
-
-        try {
-            btn.scrollIntoView({ behavior: "smooth", block: "center" });
-            await new Promise((res) => setTimeout(res, 500));
-        } catch (e) {
-            // ignore
-        }
-
-        if (!document.contains(btn)) {
-            console.warn(`Button #${index + 1} is no longer in the DOM, skipping.`);
-            continue;
-        }
-
-        try {
-            btn.click();
-            btn.style.backgroundColor = "green";
-            count++;
+        if (buttons.length === 0 && lastButtonCount === 0) {
             chrome.runtime.sendMessage({
-                type: "UPDATE_COUNT",
-                count: count,
-                total: buttons.length,
+                type: "LOG",
+                message: "No new people found, finishing.",
             });
-            console.log(`Invited: person #${index + 1}`);
-        } catch (e) {
-            console.error(`Failed to click button #${index + 1}`, e);
+            break;
+        }
+        lastButtonCount = currentButtonCount;
+
+        for (const btn of buttons) {
+            if (window.__inviter_stop || count >= maxInvites) {
+                break;
+            }
+
+            btn.dataset.invited = "true";
+
+            const randomDelay =
+                Math.floor(Math.random() * (delaySeconds * 1000 - 1000 + 1)) +
+                1000;
+            await new Promise((res) => setTimeout(res, randomDelay));
+
+            try {
+                btn.scrollIntoView({ behavior: "smooth", block: "center" });
+                await new Promise((res) => setTimeout(res, 300));
+            } catch (e) {
+                // Ignore if scrolling fails
+            }
+
+            if (!document.body.contains(btn)) {
+                console.warn("Button is no longer in the DOM, skipping.");
+                continue;
+            }
+
+            try {
+                btn.click();
+                btn.style.backgroundColor = "#5cb85c"; // Greenish color
+                count++;
+                chrome.runtime.sendMessage({
+                    type: "UPDATE_COUNT",
+                    count: count,
+                });
+                console.log(`Invited person #${count}`);
+            } catch (e) {
+                console.error("Failed to click button:", e);
+                btn.style.backgroundColor = "#d9534f"; // Reddish color
+            }
+
+            if (count > 0 && count % pauseAfterInvites === 0) {
+                chrome.runtime.sendMessage({
+                    type: "LOG",
+                    message: `Pausing for 30 seconds after ${count} invites...`,
+                });
+                await new Promise((res) => setTimeout(res, 30000));
+            }
         }
 
-        if (count > 0 && count % pauseAfterInvites === 0) {
-            console.log(`Pausing for a bit after ${count} invites...`);
-            await new Promise((res) => setTimeout(res, 30000));
+        // Scroll to load more
+        if (!window.__inviter_stop && count < maxInvites) {
+            chrome.runtime.sendMessage({
+                type: "LOG",
+                message: "Scrolling to find more people...",
+            });
+            scrollableElement.scrollTop = scrollableElement.scrollHeight;
+            await new Promise((res) => setTimeout(res, 2500)); // Wait for content to load
         }
     }
 
     window.__inviter_running = false;
 
-    // Send a final message to the popup
     chrome.runtime.sendMessage({
         type: "FINISHED",
         count: count,

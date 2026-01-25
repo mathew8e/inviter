@@ -1,12 +1,12 @@
 # Inviter — jednoduchý nástroj pro rychlé pozvání
 
-Jednoduché doplňkové rozšíření, které prochází tlačítka "Pozvat" ve Facebook seznamu reakcí, posouvá je do zobrazení a kliká na ně postupně.
+Jednoduché doplňkové rozšíření, které prochází tlačítka "Pozvat" ve Facebook seznamu reakcí. Skript automaticky posouvá seznam, aby načetl všechny osoby, a postupně na tlačítka kliká.
 
 ## 🔧 Použití
 
 1. Otevřete příspěvek na Facebooku a klikněte na počet reakcí, aby se otevřel seznam reakcí.
 2. Otevřete rozšíření (popup) a stiskněte tlačítko **Start**.
-3. Skript posouvá každé tlačítko do středu obrazovky a klikne na něj s náhodným zpožděním (2–5 s).
+3. Skript začne postupně zvat lidi a bude automaticky posouvat seznam dolů, dokud nedojde na konec.
 
 ## ⚙️ Konfigurace
 
