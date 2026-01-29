@@ -250,7 +250,7 @@ async function autoInviteAction(
     let lastScrollHeight = -1;
     let currentScrollHeight = scrollableElement.scrollHeight;
     let scrollAttempts = 0;
-    const MAX_SCROLL_ATTEMPTS = 20; // Prevent infinite loops, increased from 10
+    const MAX_SCROLL_ATTEMPTS = 100; // Prevent infinite loops, increased from 10
 
     while (
         lastScrollHeight !== currentScrollHeight &&
