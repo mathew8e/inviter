@@ -189,10 +189,10 @@ async function autoInviteAction(
 
     const selectors = isMobile ? mobileSelectors : desktopSelectors;
 
-    // --- Enhanced Scrollable Element Detection v2 ---
+    // --- Enhanced Scrollable Element Detection v3 (Bottom-Up) ---
     let scrollableElement = null;
     let originalBorderStyle = "";
-    console.log("Starting scrollable element detection v2.");
+    console.log("Starting scrollable element detection v3 (Bottom-Up).");
 
     if (!isMobile) {
         const dialog = document.querySelector('div[role="dialog"]');
@@ -200,54 +200,74 @@ async function autoInviteAction(
             console.log("Found dialog element:", dialog);
             chrome.runtime.sendMessage({
                 type: "LOG",
-                message: "Found dialog. Finding scroll area...",
+                message: "Dialog found. Detecting scroll area...",
             });
 
-            let bestCandidate = null;
-            let maxScrollHeight = -1;
+            // Find an anchor point (an invite button) to start searching from.
+            let anchorButton = null;
+            for (const selector of selectors) {
+                anchorButton = document.querySelector(selector);
+                if (anchorButton) break;
+            }
 
-            const potentialScrollables = dialog.querySelectorAll("div, ul, ol");
-            console.log(`Found ${potentialScrollables.length} potential scroll areas.`);
-
-            for (const el of potentialScrollables) {
-                console.log(
-                    `Checking element: ${el.tagName}.${el.className}, scrollH: ${el.scrollHeight}, clientH: ${el.clientHeight}`,
-                );
-                if (el.scrollHeight > el.clientHeight) {
-                    if (el.scrollHeight > maxScrollHeight) {
-                        maxScrollHeight = el.scrollHeight;
-                        bestCandidate = el;
+            if (anchorButton) {
+                console.log("Found anchor button:", anchorButton);
+                let parent = anchorButton.parentElement;
+                while (parent && parent !== dialog) {
+                    console.log(
+                        `Checking parent: ${parent.tagName}.${parent.className}, scrollH: ${parent.scrollHeight}, clientH: ${parent.clientHeight}`,
+                    );
+                    if (parent.scrollHeight > parent.clientHeight) {
+                        scrollableElement = parent;
+                        console.log("Found scrollable parent:", scrollableElement);
+                        chrome.runtime.sendMessage({
+                            type: "LOG",
+                            message: "Scrollable area found by traversing up.",
+                        });
+                        break;
                     }
+                    parent = parent.parentElement;
                 }
             }
 
-            if (bestCandidate) {
-                scrollableElement = bestCandidate;
-                console.log("Found best scrollable candidate:", scrollableElement);
-                chrome.runtime.sendMessage({
-                    type: "LOG",
-                    message: "Best scrollable area found in dialog.",
-                });
-            } else {
-                // Fallback to the dialog itself if no better candidate is found
-                scrollableElement = dialog;
-                console.log("No ideal candidate. Using dialog itself.");
-                chrome.runtime.sendMessage({
-                    type: "LOG",
-                    message: "Using dialog as scroll area.",
-                });
+            // Fallback if the bottom-up search fails
+            if (!scrollableElement) {
+                console.log(
+                    "Bottom-up search failed. Falling back to top-down search.",
+                );
+                let bestCandidate = null;
+                let maxScrollHeight = -1;
+                const potentialScrollables = dialog.querySelectorAll("div, ul, ol");
+                for (const el of potentialScrollables) {
+                    if (el.scrollHeight > el.clientHeight) {
+                        if (el.scrollHeight > maxScrollHeight) {
+                            maxScrollHeight = el.scrollHeight;
+                            bestCandidate = el;
+                        }
+                    }
+                }
+                if (bestCandidate) {
+                    scrollableElement = bestCandidate;
+                    chrome.runtime.sendMessage({
+                        type: "LOG",
+                        message: "Found scroll area via top-down search.",
+                    });
+                } else {
+                    scrollableElement = dialog; // Final fallback within dialog
+                    chrome.runtime.sendMessage({
+                        type: "LOG",
+                        message: "Using dialog as scroll area fallback.",
+                    });
+                }
             }
         } else {
-            console.log("No dialog element found. Falling back to document.body.");
+            console.log("No dialog found. Using document.body.");
             scrollableElement = document.body;
-            chrome.runtime.sendMessage({
-                type: "LOG",
-                message: "No dialog found. Using page body.",
-            });
         }
     } else {
         scrollableElement = document.body;
     }
+    // --- End of Scrollable Element Detection ---
 
     // --- Visual Debugging: Highlight the scrollable element ---
     if (scrollableElement) {
@@ -259,7 +279,6 @@ async function autoInviteAction(
             scrollableElement,
         );
     }
-    // --- End of Scrollable Element Detection ---
 
     chrome.runtime.sendMessage({
         type: "LOG",
