@@ -189,23 +189,48 @@ async function autoInviteAction(
 
     const selectors = isMobile ? mobileSelectors : desktopSelectors;
 
+    // --- Enhanced Scrollable Element Detection with Debugging ---
     let scrollableElement = null;
+    let originalBorderStyle = ""; // To store original border
+    console.log("Starting scrollable element detection.");
+
     if (!isMobile) {
         const dialog = document.querySelector('div[role="dialog"]');
         if (dialog) {
+            console.log("Found dialog element:", dialog);
+            chrome.runtime.sendMessage({
+                type: "LOG",
+                message: "Found dialog box. Searching for scrollable area...",
+            });
+
+            // Search for a scrollable descendant
             const potentialScrollables = dialog.querySelectorAll("div, ul, ol");
+            console.log(
+                `Found ${potentialScrollables.length} potential scrollable descendants.`,
+            );
+
             for (const el of potentialScrollables) {
                 const computedStyle = getComputedStyle(el);
-                if (
+                const isScrollable =
                     el.scrollHeight > el.clientHeight &&
                     (computedStyle.overflowY === "auto" ||
-                        computedStyle.overflowY === "scroll")
-                ) {
+                        computedStyle.overflowY === "scroll");
+                if (isScrollable) {
                     scrollableElement = el;
+                    console.log("Found scrollable descendant:", el);
+                    chrome.runtime.sendMessage({
+                        type: "LOG",
+                        message: "Scrollable area found inside dialog.",
+                    });
                     break;
                 }
             }
+
+            // If no descendant is scrollable, check the dialog itself
             if (!scrollableElement) {
+                console.log(
+                    "No scrollable descendant found. Checking dialog itself.",
+                );
                 const computedStyle = getComputedStyle(dialog);
                 if (
                     dialog.scrollHeight > dialog.clientHeight &&
@@ -213,13 +238,41 @@ async function autoInviteAction(
                         computedStyle.overflowY === "scroll")
                 ) {
                     scrollableElement = dialog;
+                    console.log("Dialog itself is scrollable:", dialog);
+                    chrome.runtime.sendMessage({
+                        type: "LOG",
+                        message: "Dialog box itself is the scrollable area.",
+                    });
                 }
             }
+        } else {
+            console.log("No dialog element found. Will fallback to document.body.");
+            chrome.runtime.sendMessage({
+                type: "LOG",
+                message: "No dialog box found.",
+            });
         }
     }
+
+    // Fallback to body
     if (!scrollableElement) {
         scrollableElement = document.body;
+        console.log("Using document.body as the scrollable element.");
+        chrome.runtime.sendMessage({
+            type: "LOG",
+            message: "Using main page body for scrolling.",
+        });
     }
+
+    // --- Visual Debugging: Highlight the scrollable element ---
+    if (scrollableElement) {
+        originalBorderStyle = scrollableElement.style.border;
+        scrollableElement.style.border = "2px solid red";
+        console.log(
+            "Highlighted the identified scrollable element with a red border.",
+        );
+    }
+    // --- End of Scrollable Element Detection ---
 
     chrome.runtime.sendMessage({
         type: "LOG",
@@ -246,7 +299,7 @@ async function autoInviteAction(
                     `${selector}:not([data-invited="true"])`,
                 ),
             );
-            
+
             const searchText = inputString.trim().toLowerCase();
             let filteredButtons = foundButtons;
             if (searchText) {
@@ -260,9 +313,9 @@ async function autoInviteAction(
                 currentVisibleButtons = filteredButtons;
                 chrome.runtime.sendMessage({
                     type: "LOG",
-                    message: `Found ${currentVisibleButtons.length} buttons to invite with selector: ${selector}.`,
+                    message: `Found ${currentVisibleButtons.length} buttons to invite.`,
                 });
-                break; 
+                break;
             }
         }
 
@@ -270,7 +323,7 @@ async function autoInviteAction(
             consecutiveNoNewButtons++;
             chrome.runtime.sendMessage({
                 type: "LOG",
-                message: "No new buttons found in this view. Attempting to scroll.",
+                message: "No new buttons found. Attempting to scroll...",
             });
         } else {
             consecutiveNoNewButtons = 0;
@@ -281,7 +334,7 @@ async function autoInviteAction(
                 break;
             }
 
-            btn.dataset.invited = "true"; 
+            btn.dataset.invited = "true";
 
             const randomDelay =
                 Math.floor(Math.random() * (delaySeconds * 1000 - 1000 + 1)) +
@@ -290,9 +343,9 @@ async function autoInviteAction(
 
             try {
                 btn.scrollIntoView({ behavior: "smooth", block: "center" });
-                await new Promise((res) => setTimeout(res, 300)); 
+                await new Promise((res) => setTimeout(res, 300));
             } catch (e) {
-                // Ignore if scrolling fails
+                // Ignore
             }
 
             if (!document.body.contains(btn)) {
@@ -323,21 +376,30 @@ async function autoInviteAction(
             }
         }
 
-        // Scroll after processing visible buttons
         lastScrollHeight = scrollableElement.scrollHeight;
+        const currentScrollTop = scrollableElement.scrollTop;
         scrollableElement.scrollTop = scrollableElement.scrollHeight;
-        await new Promise((res) => setTimeout(res, 2000)); // Wait for new content to load
+        console.log(
+            `Scrolling attempt: Before: ${currentScrollTop}, After: ${scrollableElement.scrollTop}, Height: ${scrollableElement.scrollHeight}`,
+        );
+        await new Promise((res) => setTimeout(res, 2000));
 
-        // Check if scrolling is done
-        if (scrollableElement.scrollHeight === lastScrollHeight && consecutiveNoNewButtons > 2) {
-             chrome.runtime.sendMessage({
+        if (
+            scrollableElement.scrollHeight === lastScrollHeight &&
+            consecutiveNoNewButtons > 2
+        ) {
+            chrome.runtime.sendMessage({
                 type: "LOG",
-                message: "Scrolling has ended and no new buttons found. Finishing.",
+                message: "End of list reached. Finishing.",
             });
             break;
         }
     }
 
+    // --- Cleanup ---
+    if (scrollableElement) {
+        scrollableElement.style.border = originalBorderStyle; // Restore original border
+    }
     window.__inviter_running = false;
     chrome.runtime.sendMessage({
         type: "FINISHED",
