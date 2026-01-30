@@ -189,10 +189,10 @@ async function autoInviteAction(
 
     const selectors = isMobile ? mobileSelectors : desktopSelectors;
 
-    // --- Enhanced Scrollable Element Detection with Debugging ---
+    // --- Enhanced Scrollable Element Detection v2 ---
     let scrollableElement = null;
-    let originalBorderStyle = ""; // To store original border
-    console.log("Starting scrollable element detection.");
+    let originalBorderStyle = "";
+    console.log("Starting scrollable element detection v2.");
 
     if (!isMobile) {
         const dialog = document.querySelector('div[role="dialog"]');
@@ -200,76 +200,63 @@ async function autoInviteAction(
             console.log("Found dialog element:", dialog);
             chrome.runtime.sendMessage({
                 type: "LOG",
-                message: "Found dialog box. Searching for scrollable area...",
+                message: "Found dialog. Finding scroll area...",
             });
 
-            // Search for a scrollable descendant
+            let bestCandidate = null;
+            let maxScrollHeight = -1;
+
             const potentialScrollables = dialog.querySelectorAll("div, ul, ol");
-            console.log(
-                `Found ${potentialScrollables.length} potential scrollable descendants.`,
-            );
+            console.log(`Found ${potentialScrollables.length} potential scroll areas.`);
 
             for (const el of potentialScrollables) {
-                const computedStyle = getComputedStyle(el);
-                const isScrollable =
-                    el.scrollHeight > el.clientHeight &&
-                    (computedStyle.overflowY === "auto" ||
-                        computedStyle.overflowY === "scroll");
-                if (isScrollable) {
-                    scrollableElement = el;
-                    console.log("Found scrollable descendant:", el);
-                    chrome.runtime.sendMessage({
-                        type: "LOG",
-                        message: "Scrollable area found inside dialog.",
-                    });
-                    break;
+                console.log(
+                    `Checking element: ${el.tagName}.${el.className}, scrollH: ${el.scrollHeight}, clientH: ${el.clientHeight}`,
+                );
+                if (el.scrollHeight > el.clientHeight) {
+                    if (el.scrollHeight > maxScrollHeight) {
+                        maxScrollHeight = el.scrollHeight;
+                        bestCandidate = el;
+                    }
                 }
             }
 
-            // If no descendant is scrollable, check the dialog itself
-            if (!scrollableElement) {
-                console.log(
-                    "No scrollable descendant found. Checking dialog itself.",
-                );
-                const computedStyle = getComputedStyle(dialog);
-                if (
-                    dialog.scrollHeight > dialog.clientHeight &&
-                    (computedStyle.overflowY === "auto" ||
-                        computedStyle.overflowY === "scroll")
-                ) {
-                    scrollableElement = dialog;
-                    console.log("Dialog itself is scrollable:", dialog);
-                    chrome.runtime.sendMessage({
-                        type: "LOG",
-                        message: "Dialog box itself is the scrollable area.",
-                    });
-                }
+            if (bestCandidate) {
+                scrollableElement = bestCandidate;
+                console.log("Found best scrollable candidate:", scrollableElement);
+                chrome.runtime.sendMessage({
+                    type: "LOG",
+                    message: "Best scrollable area found in dialog.",
+                });
+            } else {
+                // Fallback to the dialog itself if no better candidate is found
+                scrollableElement = dialog;
+                console.log("No ideal candidate. Using dialog itself.");
+                chrome.runtime.sendMessage({
+                    type: "LOG",
+                    message: "Using dialog as scroll area.",
+                });
             }
         } else {
-            console.log("No dialog element found. Will fallback to document.body.");
+            console.log("No dialog element found. Falling back to document.body.");
+            scrollableElement = document.body;
             chrome.runtime.sendMessage({
                 type: "LOG",
-                message: "No dialog box found.",
+                message: "No dialog found. Using page body.",
             });
         }
-    }
-
-    // Fallback to body
-    if (!scrollableElement) {
+    } else {
         scrollableElement = document.body;
-        console.log("Using document.body as the scrollable element.");
-        chrome.runtime.sendMessage({
-            type: "LOG",
-            message: "Using main page body for scrolling.",
-        });
     }
 
     // --- Visual Debugging: Highlight the scrollable element ---
     if (scrollableElement) {
         originalBorderStyle = scrollableElement.style.border;
-        scrollableElement.style.border = "2px solid red";
+        scrollableElement.style.border = "3px solid red";
+        scrollableElement.style.boxSizing = "border-box";
         console.log(
-            "Highlighted the identified scrollable element with a red border.",
+            "Highlighted the identified scrollable element:",
+            scrollableElement,
         );
     }
     // --- End of Scrollable Element Detection ---
