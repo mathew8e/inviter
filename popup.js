@@ -177,6 +177,7 @@ async function autoInviteAction(
     const desktopSelectors = [
         'div[aria-label="Pozvat"][role="button"]',
         'div[aria-label^="Pozvat"][role="button"]',
+        'div[aria-label="Sledovat"][role="button"]',
         `div[role="button"]`, // Fallback
     ];
 
@@ -189,93 +190,86 @@ async function autoInviteAction(
 
     const selectors = isMobile ? mobileSelectors : desktopSelectors;
 
-    // --- Enhanced Scrollable Element Detection v3 (Bottom-Up) ---
+    // --- Scrollable Element Detection v4 (User-Initiated) ---
+    chrome.runtime.sendMessage({
+        type: "LOG",
+        message: "Please click an 'Invite' button to begin.",
+    });
+
+    const anchorButton = await new Promise(resolve => {
+        const clickListener = (event) => {
+            // We are looking for a button-like element that the user clicks.
+            const targetElement = event.target.closest('div[role="button"], button');
+
+            if (targetElement) {
+                // To qualify as an anchor, it should look like an invite button.
+                // We check its label or text content for keywords.
+                const label = targetElement.getAttribute('aria-label') || targetElement.textContent || "";
+                const keywords = ['invite', 'pozvat', 'sledovat']; // English, Czech. Add more if needed.
+                
+                if (keywords.some(k => label.toLowerCase().includes(k))) {
+                    console.log('User clicked a potential invite button:', targetElement);
+                    // Prevent the default click action and stop it from propagating.
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation();
+
+                    // Clean up the listener and resolve the promise.
+                    document.removeEventListener('click', clickListener, true);
+                    resolve(targetElement);
+                } else {
+                    console.log('Clicked element was not an invite button, ignoring:', targetElement);
+                }
+            }
+        };
+
+        // Listen for clicks on the entire document in the capture phase.
+        document.addEventListener('click', clickListener, true);
+    });
+
+    chrome.runtime.sendMessage({
+        type: "LOG",
+        message: "Anchor button selected. Finding scrollable area...",
+    });
+    console.log("Selected anchor button:", anchorButton);
+    
     let scrollableElement = null;
     let originalBorderStyle = "";
-    console.log("Starting scrollable element detection v3 (Bottom-Up).");
 
     if (!isMobile) {
-        const dialog = document.querySelector('div[role="dialog"]');
-
-        // Remove aria-label="Upozornění" (and common misspelling "Upozonění") from all dialog elements
-        document.querySelectorAll('div[role="dialog"]').forEach((d) => {
-            const aria = d.getAttribute("aria-label");
-            if (aria === "Upozornění" || aria === "Upozonění") {
-                d.removeAttribute("aria-label");
-                console.log("Removed aria-label from dialog:", d);
-            }
-        });
+        const dialog = anchorButton.closest('div[role="dialog"]');
 
         if (dialog) {
-            console.log("Found dialog element:", dialog);
-            chrome.runtime.sendMessage({
-                type: "LOG",
-                message: "Dialog found. Detecting scroll area...",
-            });
-
-            // Find an anchor point (an invite button) to start searching from.
-            let anchorButton = null;
-            for (const selector of selectors) {
-                anchorButton = document.querySelector(selector);
-                if (anchorButton) break;
-            }
-
-            if (anchorButton) {
-                console.log("Found anchor button:", anchorButton);
-                let parent = anchorButton.parentElement;
-                while (parent && parent !== dialog) {
-                    console.log(
-                        `Checking parent: ${parent.tagName}.${parent.className}, scrollH: ${parent.scrollHeight}, clientH: ${parent.clientHeight}`,
-                    );
-                    if (parent.scrollHeight > parent.clientHeight) {
-                        scrollableElement = parent;
-                        console.log(
-                            "Found scrollable parent:",
-                            scrollableElement,
-                        );
-                        chrome.runtime.sendMessage({
-                            type: "LOG",
-                            message: "Scrollable area found by traversing up.",
-                        });
-                        break;
-                    }
-                    parent = parent.parentElement;
-                }
-            }
-
-            // Fallback if the bottom-up search fails
-            if (!scrollableElement) {
+            console.log("Found dialog element via anchor:", dialog);
+            
+            let parent = anchorButton.parentElement;
+            while (parent && parent !== dialog) {
+                const style = window.getComputedStyle(parent);
                 console.log(
-                    "Bottom-up search failed. Falling back to top-down search.",
+                    `Checking parent: ${parent.tagName}.${parent.className}, overflowY: ${style.overflowY}`,
                 );
-                let bestCandidate = null;
-                let maxScrollHeight = -1;
-                const potentialScrollables =
-                    dialog.querySelectorAll("div, ul, ol");
-                for (const el of potentialScrollables) {
-                    if (el.scrollHeight > el.clientHeight) {
-                        if (el.scrollHeight > maxScrollHeight) {
-                            maxScrollHeight = el.scrollHeight;
-                            bestCandidate = el;
-                        }
-                    }
-                }
-                if (bestCandidate) {
-                    scrollableElement = bestCandidate;
+                if (style.overflowY === 'scroll' || style.overflowY === 'auto') {
+                    scrollableElement = parent;
+                    console.log(
+                        "Found potentially scrollable parent based on CSS overflow style:",
+                        scrollableElement,
+                    );
                     chrome.runtime.sendMessage({
                         type: "LOG",
-                        message: "Found scroll area via top-down search.",
+                        message: "Scrollable area identified by CSS style.",
                     });
-                } else {
-                    scrollableElement = dialog; // Final fallback within dialog
-                    chrome.runtime.sendMessage({
-                        type: "LOG",
-                        message: "Using dialog as scroll area fallback.",
-                    });
+                    break; 
                 }
+                parent = parent.parentElement;
             }
+
+            if (!scrollableElement) {
+                console.log("Bottom-up search with user-selected button failed. Using dialog as fallback.");
+                scrollableElement = dialog;
+            }
+
         } else {
-            console.log("No dialog found. Using document.body.");
+            console.log("No dialog found climbing up from anchor. Using document.body.");
             scrollableElement = document.body;
         }
     } else {
