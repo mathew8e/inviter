@@ -196,6 +196,16 @@ async function autoInviteAction(
 
     if (!isMobile) {
         const dialog = document.querySelector('div[role="dialog"]');
+
+        // Remove aria-label="Upozornění" (and common misspelling "Upozonění") from all dialog elements
+        document.querySelectorAll('div[role="dialog"]').forEach((d) => {
+            const aria = d.getAttribute("aria-label");
+            if (aria === "Upozornění" || aria === "Upozonění") {
+                d.removeAttribute("aria-label");
+                console.log("Removed aria-label from dialog:", d);
+            }
+        });
+
         if (dialog) {
             console.log("Found dialog element:", dialog);
             chrome.runtime.sendMessage({
@@ -219,7 +229,10 @@ async function autoInviteAction(
                     );
                     if (parent.scrollHeight > parent.clientHeight) {
                         scrollableElement = parent;
-                        console.log("Found scrollable parent:", scrollableElement);
+                        console.log(
+                            "Found scrollable parent:",
+                            scrollableElement,
+                        );
                         chrome.runtime.sendMessage({
                             type: "LOG",
                             message: "Scrollable area found by traversing up.",
@@ -237,7 +250,8 @@ async function autoInviteAction(
                 );
                 let bestCandidate = null;
                 let maxScrollHeight = -1;
-                const potentialScrollables = dialog.querySelectorAll("div, ul, ol");
+                const potentialScrollables =
+                    dialog.querySelectorAll("div, ul, ol");
                 for (const el of potentialScrollables) {
                     if (el.scrollHeight > el.clientHeight) {
                         if (el.scrollHeight > maxScrollHeight) {
