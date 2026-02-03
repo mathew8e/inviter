@@ -1,24 +1,71 @@
 const statusEl = document.getElementById("status");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
+const historyListEl = document.querySelector("#history ul");
 
-// Initialize button states
-if (startBtn) startBtn.disabled = false;
-if (stopBtn) stopBtn.disabled = true;
+// --- History Functions ---
+function loadHistory() {
+    if (!historyListEl) return;
+    historyListEl.innerHTML = ""; // Clear existing list
+    chrome.storage.local.get("invitationHistory", (data) => {
+        if (data.invitationHistory && data.invitationHistory.length > 0) {
+            // Sort history from newest to oldest
+            const sortedHistory = data.invitationHistory.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-// Get running state from storage and update UI
-chrome.storage.local.get("isRunning", (data) => {
-    if (data.isRunning) {
-        if (statusEl) statusEl.textContent = "Currently running...";
-        if (startBtn) startBtn.disabled = true;
-        if (stopBtn) stopBtn.disabled = false;
-    } else {
-        if (statusEl) statusEl.textContent = "Ready to start.";
-        if (startBtn) startBtn.disabled = false;
-        if (stopBtn) stopBtn.disabled = true;
-    }
-});
-// Listen for changes in storage and update UI
+            sortedHistory.forEach(item => {
+                const li = document.createElement("li");
+                const date = new Date(item.date);
+                // Format date to be more readable, e.g., "Feb 03 2026, 10:30"
+                const formattedDate = `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}, ${date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+                li.textContent = `${formattedDate} - Invited ${item.count}`;
+                historyListEl.appendChild(li);
+            });
+        } else {
+            const li = document.createElement("li");
+            li.textContent = "No history yet.";
+            historyListEl.appendChild(li);
+        }
+    });
+}
+
+function saveHistory(count) {
+    const newEntry = { date: new Date().toISOString(), count: count };
+    chrome.storage.local.get("invitationHistory", (data) => {
+        let history = data.invitationHistory || [];
+        history.push(newEntry);
+        // Keep only the last 10 entries
+        if (history.length > 10) {
+            history = history.slice(history.length - 10);
+        }
+        chrome.storage.local.set({ "invitationHistory": history }, () => {
+            loadHistory(); // Refresh the list after saving
+        });
+    });
+}
+
+
+// --- Initial UI Setup ---
+function initializeUI() {
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = true;
+
+    chrome.storage.local.get("isRunning", (data) => {
+        if (data.isRunning) {
+            if (statusEl) statusEl.textContent = "Currently running...";
+            if (startBtn) startBtn.disabled = true;
+            if (stopBtn) stopBtn.disabled = false;
+        } else {
+            if (statusEl) statusEl.textContent = "Ready to start.";
+            if (startBtn) startBtn.disabled = false;
+            if (stopBtn) stopBtn.disabled = true;
+        }
+    });
+    
+    loadHistory();
+}
+
+// --- Event Listeners ---
+// Listen for storage changes to update UI (e.g., when script finishes in background)
 chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === "local" && changes.isRunning) {
         const { newValue } = changes.isRunning;
@@ -27,7 +74,7 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
             if (startBtn) startBtn.disabled = true;
             if (stopBtn) stopBtn.disabled = false;
         } else {
-            if (statusEl) statusEl.textContent = "Finished";
+            if (statusEl) statusEl.textContent = "Finished.";
             if (startBtn) startBtn.disabled = false;
             if (stopBtn) stopBtn.disabled = true;
         }
@@ -36,29 +83,25 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 
 // Listen for messages from the content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.type === "UPDATE_COUNT") {
-        const invitedCountEl = document.getElementById("invitedCount");
-        if (invitedCountEl) {
-            invitedCountEl.textContent = request.count;
-        }
-    } else if (request.type === "LOG") {
-        if (statusEl) {
-            statusEl.innerHTML = request.message;
-        }
-    } else if (request.type === "NO_BUTTONS_FOUND") {
-        if (statusEl) {
-            statusEl.innerHTML = `No buttons found. Please check the selectors in <code>popup.js</code>. <br>Mode: ${
-                request.isMobile ? "Mobile" : "Desktop"
-            }`;
-        }
-    } else if (request.type === "FINISHED") {
-        if (statusEl) {
+    switch (request.type) {
+        case "UPDATE_COUNT":
+            const invitedCountEl = document.getElementById("invitedCount");
+            if (invitedCountEl) invitedCountEl.textContent = request.count;
+            break;
+        case "LOG":
+            if (statusEl) statusEl.innerHTML = request.message;
+            break;
+        case "NO_BUTTONS_FOUND":
+            if (statusEl) statusEl.innerHTML = `No buttons found. Please check the button text.`;
+            break;
+        case "FINISHED":
             const message = request.stopped
                 ? `Stopped by user. Invited ${request.count} people.`
                 : `Finished. Invited ${request.count} people.`;
-            statusEl.textContent = message;
-        }
-        chrome.runtime.sendMessage({ type: "STOP" });
+            if (statusEl) statusEl.textContent = message;
+            saveHistory(request.count);
+            chrome.runtime.sendMessage({ type: "STOP" }); // Tell background to set isRunning to false
+            break;
     }
 });
 
@@ -71,39 +114,24 @@ if (delaySlider && delayValueEl) {
     });
 }
 
-if (!startBtn) {
-    console.error("startBtn element not found in popup");
-} else {
+// --- Button Actions ---
+if (startBtn) {
     startBtn.addEventListener("click", async () => {
-        console.log("Start button clicked");
-        if (statusEl) statusEl.textContent = "Start clicked...";
-
+        if (statusEl) statusEl.textContent = "Starting...";
         chrome.runtime.sendMessage({ type: "START" });
 
-        let [tab] = await chrome.tabs.query({
-            active: true,
-            currentWindow: true,
-        });
+        let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab || !tab.id) {
-            console.error("No active tab found to run the script");
-            if (statusEl) statusEl.textContent = "No active tab to run on";
+            if (statusEl) statusEl.textContent = "No active tab to run on.";
+            chrome.runtime.sendMessage({ type: "STOP" });
             return;
         }
 
-        const inputValue = document.getElementById("string").value || "";
-        const delay = document.getElementById("delay").value || "3.5";
-        const limit = document.getElementById("limit").value || "100";
-        const pauseAfter = document.getElementById("pauseAfter").value || "20";
-        const isMobile = document.getElementById("mobileMode").checked;
-
-        console.log("Start clicked, input:", {
-            inputValue,
-            delay,
-            limit,
-            pauseAfter,
-            isMobile,
-        });
-
+        const inputValue = document.getElementById("string").value || "Pozvat";
+        const delay = document.getElementById("delay").value || "0.5";
+        const limit = document.getElementById("limit").value || "1000";
+        const pauseAfter = document.getElementById("pauseAfter").value || "200";
+        
         try {
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
@@ -118,35 +146,24 @@ if (!startBtn) {
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: autoInviteAction,
-                args: [inputValue, delay, limit, pauseAfter, isMobile],
+                args: [inputValue, delay, limit, pauseAfter],
             });
         } catch (err) {
             console.error("executeScript failed:", err);
-            if (statusEl)
-                statusEl.textContent = "Error: " + (err && err.message);
+            if (statusEl) statusEl.textContent = "Error: " + (err ? err.message : "Unknown error");
             chrome.runtime.sendMessage({ type: "STOP" });
         }
     });
-
-    if (stopBtn) {
-        stopAction();
-    }
 }
-function stopAction() {
-    stopBtn.addEventListener("click", async () => {
-        console.log("Stop button clicked");
-        if (statusEl) statusEl.textContent = "Stop requested...";
 
-        // Send STOP message to background script to update the running state
+if (stopBtn) {
+    stopBtn.addEventListener("click", async () => {
+        if (statusEl) statusEl.textContent = "Stopping...";
         chrome.runtime.sendMessage({ type: "STOP" });
 
-        let [tab] = await chrome.tabs.query({
-            active: true,
-            currentWindow: true,
-        });
+        let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab || !tab.id) {
-            console.error("No active tab found to set stop flag");
-            if (statusEl) statusEl.textContent = "No active tab to stop on";
+            if (statusEl) statusEl.textContent = "No active tab to stop on.";
             return;
         }
         try {
@@ -156,13 +173,15 @@ function stopAction() {
                     window.__inviter_stop = true;
                 },
             });
-            console.log("Stop signal sent to page");
-            if (statusEl) statusEl.textContent = "Stopping...";
         } catch (err) {
-            console.error("Failed setting stop flag", err);
+            console.error("Failed to set stop flag:", err);
         }
     });
 }
+
+// --- Main execution ---
+document.addEventListener('DOMContentLoaded', initializeUI);
+
 
 // This function runs INSIDE the Facebook page
 async function autoInviteAction(
@@ -170,8 +189,10 @@ async function autoInviteAction(
     delay,
     limit,
     pauseAfter,
-    isMobile,
 ) {
+    // This is now hardcoded to false as the UI element was removed.
+    const isMobile = false; 
+    
     chrome.runtime.sendMessage({ type: "LOG", message: "Script starting..." });
 
     const desktopSelectors = [
@@ -181,7 +202,7 @@ async function autoInviteAction(
         `div[role="button"]`, // Fallback
     ];
 
-    const mobileSelectors = [
+    const mobileSelectors = [ // Kept for potential future use, but currently unused
         'button[data-testid="user-list-invite-button"]',
         'div[aria-label="Pozvat"]',
         'div[aria-label="Invite"]',
@@ -196,102 +217,63 @@ async function autoInviteAction(
         message: "Please click an 'Invite' button to begin.",
     });
 
-    const anchorButton = await new Promise(resolve => {
+    const anchorButton = await new Promise((resolve) => {
         const clickListener = (event) => {
-            // We are looking for a button-like element that the user clicks.
-            const targetElement = event.target.closest('div[role="button"], button');
+            const targetElement = event.target.closest(
+                'div[role="button"], button',
+            );
 
             if (targetElement) {
-                // To qualify as an anchor, it should look like an invite button.
-                // We check its label or text content for keywords.
-                const label = targetElement.getAttribute('aria-label') || targetElement.textContent || "";
-                const keywords = ['invite', 'pozvat', 'sledovat']; // English, Czech. Add more if needed.
-                
-                if (keywords.some(k => label.toLowerCase().includes(k))) {
-                    console.log('User clicked a potential invite button:', targetElement);
-                    // Prevent the default click action and stop it from propagating.
+                const label =
+                    targetElement.getAttribute("aria-label") ||
+                    targetElement.textContent ||
+                    "";
+                const keywords = ["invite", "pozvat", "sledovat"]; 
+
+                if (keywords.some((k) => label.toLowerCase().includes(k))) {
+                    console.log("User clicked a potential invite button:", targetElement);
                     event.preventDefault();
                     event.stopPropagation();
                     event.stopImmediatePropagation();
-
-                    // Clean up the listener and resolve the promise.
-                    document.removeEventListener('click', clickListener, true);
+                    document.removeEventListener("click", clickListener, true);
                     resolve(targetElement);
-                } else {
-                    console.log('Clicked element was not an invite button, ignoring:', targetElement);
                 }
             }
         };
-
-        // Listen for clicks on the entire document in the capture phase.
-        document.addEventListener('click', clickListener, true);
+        document.addEventListener("click", clickListener, true);
     });
 
     chrome.runtime.sendMessage({
         type: "LOG",
         message: "Anchor button selected. Finding scrollable area...",
     });
-    console.log("Selected anchor button:", anchorButton);
-    
+
     let scrollableElement = null;
     let originalBorderStyle = "";
-
-    if (!isMobile) {
-        const dialog = anchorButton.closest('div[role="dialog"]');
-
-        if (dialog) {
-            console.log("Found dialog element via anchor:", dialog);
-            
-            let parent = anchorButton.parentElement;
-            while (parent && parent !== dialog) {
-                const style = window.getComputedStyle(parent);
-                console.log(
-                    `Checking parent: ${parent.tagName}.${parent.className}, overflowY: ${style.overflowY}`,
-                );
-                if (style.overflowY === 'scroll' || style.overflowY === 'auto') {
-                    scrollableElement = parent;
-                    console.log(
-                        "Found potentially scrollable parent based on CSS overflow style:",
-                        scrollableElement,
-                    );
-                    chrome.runtime.sendMessage({
-                        type: "LOG",
-                        message: "Scrollable area identified by CSS style.",
-                    });
-                    break; 
-                }
-                parent = parent.parentElement;
+    
+    const dialog = anchorButton.closest('div[role="dialog"]');
+    if (dialog) {
+        let parent = anchorButton.parentElement;
+        while (parent && parent !== dialog) {
+            const style = window.getComputedStyle(parent);
+            if (style.overflowY === "scroll" || style.overflowY === "auto") {
+                scrollableElement = parent;
+                chrome.runtime.sendMessage({ type: "LOG", message: "Scrollable area found." });
+                break;
             }
-
-            if (!scrollableElement) {
-                console.log("Bottom-up search with user-selected button failed. Using dialog as fallback.");
-                scrollableElement = dialog;
-            }
-
-        } else {
-            console.log("No dialog found climbing up from anchor. Using document.body.");
-            scrollableElement = document.body;
+            parent = parent.parentElement;
+        }
+        if (!scrollableElement) {
+            scrollableElement = dialog;
         }
     } else {
         scrollableElement = document.body;
     }
-    // --- End of Scrollable Element Detection ---
 
-    // --- Visual Debugging: Highlight the scrollable element ---
     if (scrollableElement) {
         originalBorderStyle = scrollableElement.style.border;
         scrollableElement.style.border = "3px solid red";
-        scrollableElement.style.boxSizing = "border-box";
-        console.log(
-            "Highlighted the identified scrollable element:",
-            scrollableElement,
-        );
     }
-
-    chrome.runtime.sendMessage({
-        type: "LOG",
-        message: `Using ${isMobile ? "mobile" : "desktop"} selectors.`,
-    });
 
     if (typeof window.__inviter_stop === "undefined") {
         window.__inviter_stop = false;
@@ -309,110 +291,71 @@ async function autoInviteAction(
         let currentVisibleButtons = [];
         for (const selector of selectors) {
             const foundButtons = Array.from(
-                document.querySelectorAll(
-                    `${selector}:not([data-invited="true"])`,
-                ),
+                document.querySelectorAll(`${selector}:not([data-invited="true"])`)
             );
-
+            
             const searchText = inputString.trim().toLowerCase();
-            let filteredButtons = foundButtons;
-            if (searchText) {
-                filteredButtons = foundButtons.filter(
-                    (btn) =>
-                        btn.textContent.trim().toLowerCase() === searchText,
-                );
-            }
+            let filteredButtons = foundButtons.filter(btn => 
+                (btn.textContent || "").trim().toLowerCase() === searchText
+            );
 
             if (filteredButtons.length > 0) {
                 currentVisibleButtons = filteredButtons;
-                chrome.runtime.sendMessage({
-                    type: "LOG",
-                    message: `Found ${currentVisibleButtons.length} buttons to invite.`,
-                });
+                chrome.runtime.sendMessage({ type: "LOG", message: `Found ${currentVisibleButtons.length} buttons.` });
                 break;
             }
         }
 
         if (currentVisibleButtons.length === 0) {
             consecutiveNoNewButtons++;
-            chrome.runtime.sendMessage({
-                type: "LOG",
-                message: "No new buttons found. Attempting to scroll...",
-            });
+            chrome.runtime.sendMessage({ type: "LOG", message: "No new buttons found. Scrolling..." });
         } else {
             consecutiveNoNewButtons = 0;
         }
 
         for (const btn of currentVisibleButtons) {
-            if (window.__inviter_stop || count >= maxInvites) {
-                break;
-            }
+            if (window.__inviter_stop || count >= maxInvites) break;
 
             btn.dataset.invited = "true";
+            
+            const randomDelay = Math.random() * delaySeconds * 1000 + 500; // Add 0.5s base
+            await new Promise(res => setTimeout(res, randomDelay));
 
-            const randomDelay =
-                Math.floor(Math.random() * (delaySeconds * 1000 - 1000 + 1)) +
-                1000;
-            await new Promise((res) => setTimeout(res, randomDelay));
-
-            try {
-                btn.scrollIntoView({ behavior: "smooth", block: "center" });
-                await new Promise((res) => setTimeout(res, 300));
-            } catch (e) {
-                // Ignore
-            }
+            btn.scrollIntoView({ behavior: "smooth", block: "center" });
+            await new Promise(res => setTimeout(res, 200));
 
             if (!document.body.contains(btn)) {
-                console.warn("Button is no longer in the DOM, skipping.");
+                console.warn("Button vanished, skipping.");
                 continue;
             }
 
             try {
                 btn.click();
-                btn.style.backgroundColor = "#5cb85c";
+                btn.style.backgroundColor = "#4CAF50"; // Green
                 count++;
-                chrome.runtime.sendMessage({
-                    type: "UPDATE_COUNT",
-                    count: count,
-                });
-                console.log(`Invited person #${count}`);
+                chrome.runtime.sendMessage({ type: "UPDATE_COUNT", count: count });
             } catch (e) {
-                console.error("Failed to click button:", e);
-                btn.style.backgroundColor = "#d9534f";
+                btn.style.backgroundColor = "#F44336"; // Red
             }
 
             if (count > 0 && count % pauseAfterInvites === 0) {
-                chrome.runtime.sendMessage({
-                    type: "LOG",
-                    message: `Pausing for 30 seconds after ${count} invites...`,
-                });
-                await new Promise((res) => setTimeout(res, 30000));
+                chrome.runtime.sendMessage({ type: "LOG", message: `Paused for 30s after ${count} invites.` });
+                await new Promise(res => setTimeout(res, 30000));
             }
         }
 
         lastScrollHeight = scrollableElement.scrollHeight;
-        const currentScrollTop = scrollableElement.scrollTop;
         scrollableElement.scrollTop = scrollableElement.scrollHeight;
-        console.log(
-            `Scrolling attempt: Before: ${currentScrollTop}, After: ${scrollableElement.scrollTop}, Height: ${scrollableElement.scrollHeight}`,
-        );
-        await new Promise((res) => setTimeout(res, 2000));
+        await new Promise(res => setTimeout(res, 2000));
 
-        if (
-            scrollableElement.scrollHeight === lastScrollHeight &&
-            consecutiveNoNewButtons > 2
-        ) {
-            chrome.runtime.sendMessage({
-                type: "LOG",
-                message: "End of list reached. Finishing.",
-            });
+        if (scrollableElement.scrollHeight === lastScrollHeight && consecutiveNoNewButtons > 2) {
+            chrome.runtime.sendMessage({ type: "LOG", message: "End of list reached." });
             break;
         }
     }
 
-    // --- Cleanup ---
     if (scrollableElement) {
-        scrollableElement.style.border = originalBorderStyle; // Restore original border
+        scrollableElement.style.border = originalBorderStyle;
     }
     window.__inviter_running = false;
     chrome.runtime.sendMessage({

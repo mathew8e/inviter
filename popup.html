@@ -68,12 +68,6 @@
         <label for="pauseAfter">Pauza po X pozvánkách</label>
         <input type="number" id="pauseAfter" value="200">
     </div>
-    <div class="input-group">
-        <label>
-            <input type="checkbox" id="mobileMode">
-            Mobilní verze
-        </label>
-    </div>
     <div style="display:flex; gap:8px;">
         <button id="startBtn">Spustit</button>
         <button id="stopBtn" disabled>Zastavit</button>
@@ -81,6 +75,10 @@
     <div class="stats">
         <p id="status"></p>
         <p>Pozváno: <span id="invitedCount">0</span></p>
+    </div>
+    <div id="history">
+        <h4>Historie</h4>
+        <ul></ul>
     </div>
     <script src="popup.js"></script>
 </body>
