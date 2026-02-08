@@ -2,7 +2,11 @@ const statusEl = document.getElementById("status");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const historyListEl = document.querySelector("#history ul");
-const consecutiveNoNewButtonsMax = document.getElementById("noButton").value; // Max times to check for new buttons before assuming end of list
+function getConsecutiveNoNewButtonsMax() {
+    const el = document.getElementById("noButton");
+    const val = el ? parseInt(el.value, 10) : NaN;
+    return Number.isFinite(val) ? val : 5; // default to 5 if not present or invalid
+}
 
 // --- History Functions ---
 function loadHistory() {
@@ -137,6 +141,7 @@ if (startBtn) {
         const delay = document.getElementById("delay").value || "0.5";
         const limit = document.getElementById("limit").value || "1000";
         const pauseAfter = document.getElementById("pauseAfter").value || "200";
+        const consecutiveNoNewButtonsMax = getConsecutiveNoNewButtonsMax();
 
         try {
             await chrome.scripting.executeScript({
@@ -152,7 +157,13 @@ if (startBtn) {
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: autoInviteAction,
-                args: [inputValue, delay, limit, pauseAfter],
+                args: [
+                    inputValue,
+                    delay,
+                    limit,
+                    pauseAfter,
+                    consecutiveNoNewButtonsMax,
+                ],
             });
         } catch (err) {
             console.error("executeScript failed:", err);
@@ -194,9 +205,20 @@ if (stopBtn) {
 document.addEventListener("DOMContentLoaded", initializeUI);
 
 // This function runs INSIDE the Facebook page
-async function autoInviteAction(inputString, delay, limit, pauseAfter) {
+async function autoInviteAction(
+    inputString,
+    delay,
+    limit,
+    pauseAfter,
+    consecutiveNoNewButtonsMax,
+) {
     // This is now hardcoded to false as the UI element was removed.
     const isMobile = false;
+
+    consecutiveNoNewButtonsMax = parseInt(consecutiveNoNewButtonsMax, 10);
+    if (!Number.isFinite(consecutiveNoNewButtonsMax)) {
+        consecutiveNoNewButtonsMax = 5;
+    }
 
     chrome.runtime.sendMessage({ type: "LOG", message: "Script starting..." });
 
