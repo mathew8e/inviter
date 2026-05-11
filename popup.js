@@ -151,6 +151,12 @@ if (startBtn) {
         const pauseAfter = document.getElementById("pauseAfter").value || "200";
         const consecutiveNoNewButtonsMax = getConsecutiveNoNewButtonsMax();
 
+        // Helper to decide search string based on user input or common defaults
+        let searchString = inputValue;
+        // If the user hasn't changed the default Czech "Pozvat", we also check for "Follow" or "Invite"
+        // But the script uses the exact inputString provided to the function. 
+        // We'll pass the input as is, but the content script logic can be more flexible.
+
         try {
             await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
@@ -265,7 +271,7 @@ async function autoInviteAction(
                     targetElement.getAttribute("aria-label") ||
                     targetElement.textContent ||
                     "";
-                const keywords = ["invite", "pozvat", "sledovat"];
+                const keywords = ["invite", "pozvat", "sledovat", "follow"];
 
                 if (keywords.some((k) => label.toLowerCase().includes(k))) {
                     console.log(
