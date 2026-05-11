@@ -121,6 +121,14 @@ if (delaySlider && delayValueEl) {
     });
 }
 
+const pcModeBtn = document.getElementById("pcModeBtn");
+if (pcModeBtn) {
+    pcModeBtn.addEventListener("click", () => {
+        document.body.classList.add("pc-mode");
+        pcModeBtn.style.display = "none";
+    });
+}
+
 // --- Button Actions ---
 if (startBtn) {
     startBtn.addEventListener("click", async () => {

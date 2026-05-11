@@ -47,11 +47,44 @@
         .stats {
             margin-top: 10px;
         }
+
+        body.pc-mode {
+            width: 400px;
+            font-size: 14px;
+        }
+
+        body.pc-mode button {
+            height: auto;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        body.pc-mode input[type="text"],
+        body.pc-mode input[type="number"] {
+            height: auto;
+            font-size: 14px;
+        }
+
+        body.pc-mode h3 {
+            font-size: 18px;
+            margin: 10px 0;
+        }
+
+        body.pc-mode h4 {
+            font-size: 16px;
+        }
+
+        body.pc-mode label {
+            font-size: 13px;
+        }
     </style>
 </head>
 
 <body>
     <h3>FB Pozvání</h3>
+    <div style="margin-bottom: 15px;">
+        <button id="pcModeBtn" style="background: #4267B2;">PC Mode</button>
+    </div>
     <div class="input-group">
         <label for="string">Text pro vyhledání tlačítka</label>
         <input type="text" name="string" id="string" value="Pozvat">
