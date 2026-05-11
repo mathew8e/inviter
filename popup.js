@@ -234,6 +234,7 @@ async function autoInviteAction(
         'div[aria-label="Pozvat"][role="button"]',
         'div[aria-label^="Pozvat"][role="button"]',
         'div[aria-label="Sledovat"][role="button"]',
+        'div[aria-label="Follow"][role="button"]',
         `div[role="button"]`, // Fallback
     ];
 
