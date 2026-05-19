@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+  inviter:
+    build: .
+    image: inviter-headless:latest
+    restart: unless-stopped
+    volumes:
+      - ./data:/usr/src/app/data
+      - ./profile:/usr/src/app/profile
+    environment:
+      - NODE_ENV=production
+    command: ["node", "src/index.js"]
