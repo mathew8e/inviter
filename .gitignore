@@ -1,0 +1,24 @@
+# Node modules
+node_modules/
+
+# Headless service
+headless/node_modules/
+headless/data/
+headless/profile/
+headless/package-lock.json
+headless/.env
+
+# Env
+.env
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+
+# Generated db
+**/data/*.db
+
