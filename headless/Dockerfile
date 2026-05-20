@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     libatk1.0-0 \
     libatk-bridge2.0-0 \
     libc6 \
+    libasound2 \
     libcairo2 \
     libdbus-1-3 \
     libexpat1 \

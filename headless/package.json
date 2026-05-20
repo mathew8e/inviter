@@ -10,9 +10,9 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "install": "^0.13.0",
     "puppeteer": "^21.0.0",
-    "sqlite3": "^5.1.6",
-    "yargs": "^17.7.2",
-    "winston": "^3.9.0"
+    "winston": "^3.9.0",
+    "yargs": "^17.7.2"
   }
 }

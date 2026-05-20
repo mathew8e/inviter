@@ -1,36 +1,21 @@
 const path = require("path");
 const fs = require("fs");
-const sqlite3 = require("sqlite3");
 
-const DB_FILE =
-    process.env.DB_PATH || path.resolve(__dirname, "..", "data", "invites.db");
-
-let db;
+const DATA_DIR = path.join(__dirname, "..", "data");
+const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "invitations.json");
 
 function init() {
-    const dir = path.dirname(DB_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    db = new sqlite3.Database(DB_FILE);
-    return new Promise((resolve, reject) => {
-        db.run(
-            `CREATE TABLE IF NOT EXISTS invitation_history (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, url TEXT, count INTEGER)`,
-            (err) => (err ? reject(err) : resolve()),
-        );
-    });
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify([]));
+    return Promise.resolve();
 }
 
 function saveHistory(url, count) {
-    const ts = new Date().toISOString();
-    return new Promise((resolve, reject) => {
-        db.run(
-            `INSERT INTO invitation_history (ts, url, count) VALUES (?, ?, ?)`,
-            [ts, url, count],
-            function (err) {
-                if (err) return reject(err);
-                resolve(this.lastID);
-            },
-        );
-    });
+    const entries = JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+    const entry = { id: entries.length + 1, ts: Date.now(), url, count };
+    entries.push(entry);
+    fs.writeFileSync(DB_PATH, JSON.stringify(entries, null, 2));
+    return Promise.resolve(entry.id);
 }
 
 module.exports = { init, saveHistory };
