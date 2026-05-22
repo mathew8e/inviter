@@ -9,10 +9,13 @@ const path = require("path");
 
 const DEFAULT_SELECTORS = [
     'div[aria-label="Follow"][role="button"]',
+    'div[aria-label="Sledovat"][role="button"]',
     'div[aria-label="Pozvat"][role="button"]',
     'button[aria-label="Follow"]',
+    'button[aria-label="Sledovat"]',
     'button[aria-label="Pozvat"]',
     'a[role="button"][aria-label*="Follow"]',
+    'a[role="button"][aria-label*="Sledovat"]',
 ];
 
 function formatLaunchOptions(launchOptions) {
@@ -367,23 +370,89 @@ async function runWithBrowser({
             await page.evaluate(async () => {
                 // find a scrollable container within any dialog
                 function findScrollable() {
+                    const followSelectors = [
+                        'button[aria-label="Follow"]',
+                        'button[aria-label="Sledovat"]',
+                        'div[role="button"][aria-label*="Follow"]',
+                        'div[role="button"][aria-label*="Sledovat"]',
+                        '[role="button"][aria-label*="Follow"]',
+                        '[role="button"][aria-label*="Sledovat"]',
+                        '[aria-label="Follow"]',
+                        '[aria-label="Sledovat"]',
+                    ];
+
                     const dialogs = Array.from(
                         document.querySelectorAll('[role="dialog"]'),
                     );
+
+                    // Helper: count follow-like descendants
+                    function countFollows(el) {
+                        try {
+                            let count = 0;
+                            for (const sel of followSelectors) {
+                                count += (el.querySelectorAll(sel) || [])
+                                    .length;
+                            }
+                            return count;
+                        } catch (e) {
+                            return 0;
+                        }
+                    }
+
+                    // Prefer a descendant inside the dialog that actually contains Follow buttons
                     for (const d of dialogs) {
+                        // look for elements that explicitly contain follow buttons
+                        const candidates = Array.from(
+                            d.querySelectorAll("*") || [],
+                        );
+                        let best = null;
+                        let bestCount = 0;
+                        for (const c of candidates) {
+                            const cnt = countFollows(c);
+                            if (cnt > 0) {
+                                // prefer elements that are scrollable or have overflow
+                                const style = window.getComputedStyle(c) || {};
+                                const overflowY = (
+                                    style.overflowY || ""
+                                ).toLowerCase();
+                                const scrollable =
+                                    overflowY === "auto" ||
+                                    overflowY === "scroll" ||
+                                    c.scrollHeight > c.clientHeight;
+                                if (scrollable) return c;
+                                if (cnt > bestCount) {
+                                    best = c;
+                                    bestCount = cnt;
+                                }
+                            }
+                        }
+
+                        // If we found a non-scrollable container with many follow buttons, pick that
+                        if (best) return best;
+
+                        // fallback: if dialog itself is scrollable, use it
                         if (d.scrollHeight > d.clientHeight) return d;
                     }
-                    // fallback: look for large containers
-                    const candidates = Array.from(
+
+                    // fallback: look for any large container on the page
+                    const pageCandidates = Array.from(
                         document.querySelectorAll("div"),
                     );
-                    for (const c of candidates) {
+                    for (const c of pageCandidates) {
+                        const style = window.getComputedStyle(c) || {};
+                        const overflowY = (style.overflowY || "").toLowerCase();
                         if (
-                            c.scrollHeight > c.clientHeight &&
+                            (overflowY === "auto" || overflowY === "scroll") &&
                             c.clientHeight > 100
                         )
                             return c;
+                        if (
+                            c.scrollHeight > c.clientHeight &&
+                            c.clientHeight > 200
+                        )
+                            return c;
                     }
+
                     return (
                         document.scrollingElement ||
                         document.documentElement ||
@@ -392,11 +461,17 @@ async function runWithBrowser({
                 }
 
                 const container = findScrollable();
-                const step =
-                    Math.floor((container.scrollHeight || 1000) / 6) || 400;
-                for (let i = 0; i < 8; i++) {
-                    container.scrollBy({ top: step, behavior: "smooth" });
-                    await new Promise((r) => setTimeout(r, 600));
+                const total = Math.max(container.scrollHeight || 1000, 1000);
+                const step = Math.floor(total / 6) || 400;
+                for (let i = 0; i < 10; i++) {
+                    try {
+                        container.scrollBy({ top: step, behavior: "smooth" });
+                    } catch (e) {
+                        try {
+                            container.scrollTop = container.scrollTop + step;
+                        } catch (e) {}
+                    }
+                    await new Promise((r) => setTimeout(r, 450));
                 }
             });
 
@@ -434,9 +509,9 @@ async function runWithBrowser({
                             .replace(/\s+/g, " ")
                             .trim();
                         if (
-                            /\bFollow\b/i.test(aria) ||
-                            /^Follow$/i.test(txt) ||
-                            /\bFollow\b/i.test(txt)
+                            /(?:\bFollow\b|\bsledovat\b)/i.test(aria) ||
+                            /^(?:Follow|Sledovat)$/i.test(txt) ||
+                            /(?:\bFollow\b|\bsledovat\b)/i.test(txt)
                         ) {
                             if (isVisible(n)) els.add(n);
                         }
@@ -455,9 +530,9 @@ async function runWithBrowser({
                                     n.getAttribute("aria-label")) ||
                                 "";
                             if (
-                                /\bFollow\b/i.test(aria) ||
-                                /^Follow$/i.test(txt) ||
-                                /\bFollow\b/i.test(txt)
+                                /(?:\bFollow\b|\bsledovat\b)/i.test(aria) ||
+                                /^(?:Follow|Sledovat)$/i.test(txt) ||
+                                /(?:\bFollow\b|\bsledovat\b)/i.test(txt)
                             ) {
                                 if (isVisible(n)) els.add(n);
                             }
@@ -467,6 +542,91 @@ async function runWithBrowser({
 
                 return Array.from(els).length;
             });
+            // If we got zero, dump detailed candidate info for post-scroll debugging
+            if (!followCount) {
+                try {
+                    const candidates = await page.evaluate(() => {
+                        const sels = [
+                            "button[aria-label]",
+                            'div[role="button"][aria-label]',
+                            '[role="button"][aria-label]',
+                            "[aria-label]",
+                        ];
+                        const nodes = [];
+                        const all = Array.from(document.querySelectorAll("*"));
+                        for (const n of all) {
+                            try {
+                                const aria =
+                                    n.getAttribute &&
+                                    n.getAttribute("aria-label");
+                                const txt = (n.innerText || "")
+                                    .replace(/\s+/g, " ")
+                                    .trim();
+                                if (aria || /(?:follow|sledovat)/i.test(txt) || (aria && /(?:follow|sledovat)/i.test(aria))) {
+                                    const r = n.getBoundingClientRect
+                                        ? n.getBoundingClientRect()
+                                        : {
+                                              width: 0,
+                                              height: 0,
+                                              top: 0,
+                                              left: 0,
+                                          };
+                                    const style = window.getComputedStyle
+                                        ? window.getComputedStyle(n)
+                                        : {};
+                                    nodes.push({
+                                        aria: aria || "",
+                                        text: txt.slice(0, 400),
+                                        tag: n.tagName,
+                                        roles:
+                                            (n.getAttribute &&
+                                                n.getAttribute("role")) ||
+                                            "",
+                                        rect: {
+                                            w: r.width,
+                                            h: r.height,
+                                            top: r.top,
+                                            left: r.left,
+                                        },
+                                        visibleStyle: {
+                                            display: style.display || "",
+                                            visibility: style.visibility || "",
+                                            opacity: style.opacity || "",
+                                            overflowY: style.overflowY || "",
+                                        },
+                                        outerHTML: (n.outerHTML || "").slice(
+                                            0,
+                                            2000,
+                                        ),
+                                        inDialog:
+                                            !!n.closest &&
+                                            !!n.closest('[role="dialog"]'),
+                                    });
+                                }
+                            } catch (e) {}
+                        }
+                        return nodes;
+                    });
+                    const candPath = path.join(
+                        process.cwd(),
+                        "data",
+                        `post-scroll-button-candidates-${Date.now()}.json`,
+                    );
+                    fs.writeFileSync(
+                        candPath,
+                        JSON.stringify(candidates, null, 2),
+                        "utf8",
+                    );
+                    logger.info(
+                        `Wrote ${candidates.length} post-scroll candidates to ${candPath}`,
+                    );
+                } catch (e) {
+                    logger.error(
+                        "Failed to dump post-scroll candidates: " +
+                            (e && e.message),
+                    );
+                }
+            }
 
             logger.info(`count-follow result: ${followCount}`);
             await storage.saveHistory(url, followCount);
