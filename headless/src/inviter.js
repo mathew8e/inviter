@@ -562,7 +562,11 @@ async function runWithBrowser({
                                 const txt = (n.innerText || "")
                                     .replace(/\s+/g, " ")
                                     .trim();
-                                if (aria || /(?:follow|sledovat)/i.test(txt) || (aria && /(?:follow|sledovat)/i.test(aria))) {
+                                if (
+                                    aria ||
+                                    /(?:follow|sledovat)/i.test(txt) ||
+                                    (aria && /(?:follow|sledovat)/i.test(aria))
+                                ) {
                                     const r = n.getBoundingClientRect
                                         ? n.getBoundingClientRect()
                                         : {
