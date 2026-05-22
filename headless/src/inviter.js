@@ -4,6 +4,8 @@ const { stdin, stdout } = require("process");
 const logger = require("./logger");
 const storage = require("./storage");
 const session = require("./session");
+const fs = require("fs");
+const path = require("path");
 
 const DEFAULT_SELECTORS = [
     'div[aria-label="Follow"][role="button"]',
@@ -98,25 +100,60 @@ async function runWithBrowser({
                     }
                 }
 
-                // 1) Prefer aria-label toolbar
+                // 1) Prefer exact 'All reactions' opener (role=button with that visible text)
+                try {
+                    const roleButtons = Array.from(
+                        document.querySelectorAll('[role="button"]'),
+                    );
+                    const exactAll = roleButtons.find((b) => {
+                        const txt = (b.innerText || "")
+                            .replace(/\s+/g, " ")
+                            .trim();
+                        return (
+                            /^all reactions[:\s]?/i.test(txt) ||
+                            /\ball reactions\b/i.test(txt)
+                        );
+                    });
+                    if (exactAll && tryClick(exactAll)) return true;
+                } catch (e) {
+                    // ignore
+                }
+
+                // 2) Prefer toolbar element with aria-label 'See who reacted' (handle localisation)
                 const toolbar = document.querySelector(
-                    '[aria-label="See who reacted to this"]',
+                    '[role="toolbar"][aria-label]',
                 );
-                if (toolbar) {
-                    // find closest role=button descendant
+                if (
+                    toolbar &&
+                    /see who reacted|see who reacted to this|who reacted|reakce|reagoval|podívejte se|people|lidé/i.test(
+                        toolbar.getAttribute("aria-label") || "",
+                    )
+                ) {
                     const btn =
                         toolbar.closest('[role="button"]') ||
-                        toolbar.querySelector('[role="button"]');
+                        toolbar.parentElement?.querySelector(
+                            '[role="button"]',
+                        ) ||
+                        toolbar.querySelector('[role="button"]') ||
+                        toolbar;
                     if (btn && tryClick(btn)) return true;
                 }
 
-                // 2) Find any visible element with text 'All reactions'
+                // 2) Find any visible element with text 'All reactions' or localized variants
                 const candidates = Array.from(
                     document.querySelectorAll('[role="button"], div, span'),
                 );
                 for (const c of candidates) {
                     const txt = (c.innerText || "").replace(/\s+/g, " ").trim();
-                    if (/all reactions/i.test(txt)) {
+                    if (
+                        /all reactions/i.test(txt) ||
+                        /see who reacted/i.test(txt) ||
+                        /reakce/i.test(txt) ||
+                        /podívejte se/i.test(txt) ||
+                        /zareagoval/i.test(txt) ||
+                        /\bpeople\b/i.test(txt) ||
+                        /\blidé\b/i.test(txt)
+                    ) {
                         if (tryClick(c)) return true;
                         const btn = c.closest('[role="button"]');
                         if (btn && tryClick(btn)) return true;
@@ -139,6 +176,176 @@ async function runWithBrowser({
             });
 
             logger.info(`Reactions opener clicked: ${openerClicked}`);
+
+            if (!openerClicked) {
+                try {
+                    // Dump page HTML for debugging
+                    const html = await page.content();
+                    const dumpDir = path.join(process.cwd(), "data");
+                    if (!fs.existsSync(dumpDir))
+                        fs.mkdirSync(dumpDir, { recursive: true });
+                    const dumpPath = path.join(
+                        dumpDir,
+                        `page-debug-${Date.now()}.html`,
+                    );
+                    fs.writeFileSync(dumpPath, html, "utf8");
+                    logger.info(`Wrote page HTML to ${dumpPath}`);
+
+                    // Try to locate the opener element by visible text and return its outerHTML and an XPath
+                    const openerInfo = await page.evaluate(() => {
+                        function getXPathForElement(el) {
+                            if (!el) return null;
+                            if (el.id) return `//*[@id="${el.id}"]`;
+                            const parts = [];
+                            while (el && el.nodeType === 1) {
+                                let nb = 0;
+                                let sib = el.previousSibling;
+                                while (sib) {
+                                    if (
+                                        sib.nodeType === 1 &&
+                                        sib.nodeName === el.nodeName
+                                    )
+                                        nb++;
+                                    sib = sib.previousSibling;
+                                }
+                                parts.unshift(
+                                    el.nodeName.toLowerCase() +
+                                        "[" +
+                                        (nb + 1) +
+                                        "]",
+                                );
+                                el = el.parentNode;
+                            }
+                            return "/" + parts.join("/");
+                        }
+
+                        const candidates = Array.from(
+                            document.querySelectorAll(
+                                '[role="button"], div, span',
+                            ),
+                        );
+                        for (const c of candidates) {
+                            const txt = (c.innerText || "")
+                                .replace(/\s+/g, " ")
+                                .trim();
+                            if (
+                                /all reactions/i.test(txt) ||
+                                /see who reacted/i.test(txt) ||
+                                /others$/i.test(txt)
+                            ) {
+                                return {
+                                    outerHTML: c.outerHTML,
+                                    xpath: getXPathForElement(c),
+                                };
+                            }
+                        }
+                        return null;
+                    });
+
+                    if (openerInfo) {
+                        logger.info(
+                            `Found opener candidate via text. xpath=${openerInfo.xpath}`,
+                        );
+                        // log a trimmed outerHTML sample
+                        const sample = (openerInfo.outerHTML || "").slice(
+                            0,
+                            2000,
+                        );
+                        logger.info(`Opener outerHTML sample: ${sample}`);
+
+                        // Try to click by XPath
+                        if (openerInfo.xpath) {
+                            const handles = await page.$x(openerInfo.xpath);
+                            if (handles && handles.length > 0) {
+                                try {
+                                    await handles[0].evaluate((el) =>
+                                        el.scrollIntoView({
+                                            block: "center",
+                                            inline: "center",
+                                        }),
+                                    );
+                                    await handles[0].click();
+                                    logger.info(
+                                        "Clicked opener via XPath retry",
+                                    );
+                                    // allow rendering
+                                    await page.waitForTimeout(800);
+                                } catch (e) {
+                                    logger.info(
+                                        "XPath click attempt failed: " +
+                                            (e && e.message),
+                                    );
+                                }
+                            } else {
+                                logger.info(
+                                    "No element handle found for computed XPath",
+                                );
+                            }
+                        }
+                    } else {
+                        logger.info(
+                            "No opener candidate found by text heuristics",
+                        );
+
+                        // Dump candidate buttons for debugging: text, aria, classes, outerHTML
+                        try {
+                            const candidates = await page.evaluate(() => {
+                                const nodes = Array.from(
+                                    document.querySelectorAll(
+                                        '[role="button"], button, a',
+                                    ),
+                                );
+                                return nodes.slice(0, 400).map((n) => {
+                                    const txt = (n.innerText || "")
+                                        .replace(/\s+/g, " ")
+                                        .trim();
+                                    return {
+                                        text: txt.slice(0, 400),
+                                        aria:
+                                            (n.getAttribute &&
+                                                n.getAttribute("aria-label")) ||
+                                            "",
+                                        role:
+                                            (n.getAttribute &&
+                                                n.getAttribute("role")) ||
+                                            "",
+                                        classes: (n.className || "")
+                                            .toString()
+                                            .slice(0, 300),
+                                        outerHTML: (n.outerHTML || "").slice(
+                                            0,
+                                            2000,
+                                        ),
+                                    };
+                                });
+                            });
+                            const candPath = path.join(
+                                process.cwd(),
+                                "data",
+                                `button-candidates-${Date.now()}.json`,
+                            );
+                            fs.writeFileSync(
+                                candPath,
+                                JSON.stringify(candidates, null, 2),
+                                "utf8",
+                            );
+                            logger.info(
+                                `Wrote ${candidates.length} button candidates to ${candPath}`,
+                            );
+                        } catch (e) {
+                            logger.error(
+                                "Failed to dump button candidates: " +
+                                    (e && e.message),
+                            );
+                        }
+                    }
+                } catch (e) {
+                    logger.error(
+                        "Error during debug dump/opener probe: " +
+                            (e && e.message),
+                    );
+                }
+            }
 
             // Wait for the overlay/dialog to appear; attempt a few heuristics
             try {
