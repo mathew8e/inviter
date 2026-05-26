@@ -14,8 +14,8 @@ async function main() {
         })
         .option("max", {
             type: "number",
-            default: 10,
-            describe: "Maximum number of follows/invites",
+            default: 1000,
+            describe: "Maximum number of follows/invites before stopping",
         })
         .option("delay", {
             type: "number",

@@ -11,11 +11,14 @@ const DEFAULT_SELECTORS = [
     'div[aria-label="Follow"][role="button"]',
     'div[aria-label="Sledovat"][role="button"]',
     'div[aria-label="Pozvat"][role="button"]',
+    'div[aria-label="Add friend"][role="button"]',
     'button[aria-label="Follow"]',
     'button[aria-label="Sledovat"]',
     'button[aria-label="Pozvat"]',
+    'button[aria-label="Add friend"]',
     'a[role="button"][aria-label*="Follow"]',
     'a[role="button"][aria-label*="Sledovat"]',
+    'a[role="button"][aria-label*="Add friend"]',
 ];
 
 function formatLaunchOptions(launchOptions) {
@@ -31,7 +34,7 @@ function formatLaunchOptions(launchOptions) {
 
 async function runWithBrowser({
     url,
-    max = 10,
+    max = 1000,
     delay = 1000,
     profileDir,
     headless = true,
@@ -87,7 +90,7 @@ async function runWithBrowser({
         if (countFollow || inviteFollow) {
             logger.info(
                 inviteFollow
-                    ? "Running invite-follow mode: will click reactions opener and click Follow buttons."
+                    ? "Running invite-follow mode: will click reactions opener and click Follow / Add friend buttons."
                     : "Running count-follow mode: will click reactions opener and count Follow buttons.",
             );
 
@@ -486,20 +489,25 @@ async function runWithBrowser({
                             "follow",
                             "pozvat",
                             "invite",
+                            "add friend",
+                            "přidat přítele",
+                            "přidat do přátel",
                         ];
 
                         const selectors = [
-                            'button[aria-label]',
+                            "button[aria-label]",
                             'div[role="button"][aria-label]',
                             '[role="button"][aria-label]',
-                            '[aria-label]',
-                            'button',
+                            "[aria-label]",
+                            "button",
                             'div[role="button"]',
                             'a[role="button"]',
                         ];
 
                         function sleep(ms) {
-                            return new Promise((resolve) => setTimeout(resolve, ms));
+                            return new Promise((resolve) =>
+                                setTimeout(resolve, ms),
+                            );
                         }
 
                         function isVisible(el) {
@@ -593,14 +601,16 @@ async function runWithBrowser({
                                     if (!isVisible(candidate)) continue;
                                     let count = 0;
                                     for (const selector of selectors) {
-                                        count += candidate.querySelectorAll(
-                                            selector,
-                                        ).length;
+                                        count +=
+                                            candidate.querySelectorAll(
+                                                selector,
+                                            ).length;
                                     }
                                     if (count > 0) {
                                         const style =
-                                            window.getComputedStyle(candidate) ||
-                                            {};
+                                            window.getComputedStyle(
+                                                candidate,
+                                            ) || {};
                                         const overflowY = (
                                             style.overflowY || ""
                                         ).toLowerCase();
@@ -716,7 +726,8 @@ async function runWithBrowser({
                                 }
 
                                 try {
-                                    scrollable.scrollTop = scrollable.scrollHeight;
+                                    scrollable.scrollTop =
+                                        scrollable.scrollHeight;
                                 } catch (e) {}
                                 await sleep(1200);
                             } else {
@@ -727,22 +738,30 @@ async function runWithBrowser({
                         return { count: clicked.length, accounts: clicked };
                     },
                     {
-                        maxInvites: Math.max(1, parseInt(max, 10) || 10),
+                        maxInvites: Math.max(1, parseInt(max, 10) || 1000),
                         delayMs: Math.max(0, parseInt(delay, 10) || 0),
                         noNewButtonsLimit: 5,
                     },
                 );
 
-                count = inviteResult && typeof inviteResult === "object" ? inviteResult.count || 0 : 0;
+                count =
+                    inviteResult && typeof inviteResult === "object"
+                        ? inviteResult.count || 0
+                        : 0;
 
                 try {
-                    const accounts = (inviteResult && inviteResult.accounts) || [];
+                    const accounts =
+                        (inviteResult && inviteResult.accounts) || [];
                     const outPath = path.join(
                         process.cwd(),
                         "data",
                         `followed-accounts-${Date.now()}.json`,
                     );
-                    fs.writeFileSync(outPath, JSON.stringify(accounts, null, 2), "utf8");
+                    fs.writeFileSync(
+                        outPath,
+                        JSON.stringify(accounts, null, 2),
+                        "utf8",
+                    );
                     logger.info(
                         `Wrote ${accounts.length} followed accounts to ${outPath}`,
                     );
