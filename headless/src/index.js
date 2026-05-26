@@ -44,6 +44,12 @@ async function main() {
             describe:
                 "Only count clickable 'Follow' buttons on the reactions list",
         })
+        .option("invite-follow", {
+            type: "boolean",
+            default: false,
+            describe:
+                "Click clickable 'Follow' / 'Sledovat' buttons on the reactions list",
+        })
         .help().argv;
 
     await storage.init();
@@ -57,6 +63,7 @@ async function main() {
             headless: argv.headless,
             waitForLogin: argv["wait-for-login"],
             countFollow: argv["count-follow"],
+            inviteFollow: argv["invite-follow"],
         });
         logger.info(`Run finished. total actions: ${count}`);
         process.exit(0);

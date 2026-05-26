@@ -37,6 +37,7 @@ async function runWithBrowser({
     headless = true,
     waitForLogin = false,
     countFollow = false,
+    inviteFollow = false,
 }) {
     const launchOptions = session.getLaunchOptions(profileDir, headless);
     logger.info(
@@ -83,9 +84,11 @@ async function runWithBrowser({
         // Give page some time to render dynamic content
         await page.waitForTimeout(2000);
 
-        if (countFollow) {
+        if (countFollow || inviteFollow) {
             logger.info(
-                "Running count-follow mode: will click reactions opener and count Follow buttons.",
+                inviteFollow
+                    ? "Running invite-follow mode: will click reactions opener and click Follow buttons."
+                    : "Running count-follow mode: will click reactions opener and count Follow buttons.",
             );
 
             // Try clicking the 'All reactions' opener or toolbar that reveals people who reacted
@@ -474,6 +477,287 @@ async function runWithBrowser({
                     await new Promise((r) => setTimeout(r, 450));
                 }
             });
+
+            if (inviteFollow && !countFollow) {
+                const inviteResult = await page.evaluate(
+                    async ({ maxInvites, delayMs, noNewButtonsLimit }) => {
+                        const targetLabels = [
+                            "sledovat",
+                            "follow",
+                            "pozvat",
+                            "invite",
+                        ];
+
+                        const selectors = [
+                            'button[aria-label]',
+                            'div[role="button"][aria-label]',
+                            '[role="button"][aria-label]',
+                            '[aria-label]',
+                            'button',
+                            'div[role="button"]',
+                            'a[role="button"]',
+                        ];
+
+                        function sleep(ms) {
+                            return new Promise((resolve) => setTimeout(resolve, ms));
+                        }
+
+                        function isVisible(el) {
+                            if (!el) return false;
+                            const style = window.getComputedStyle(el);
+                            if (
+                                style &&
+                                (style.visibility === "hidden" ||
+                                    style.display === "none")
+                            ) {
+                                return false;
+                            }
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 2 && rect.height > 2;
+                        }
+
+                        function normalize(value) {
+                            return (value || "")
+                                .replace(/\s+/g, " ")
+                                .trim()
+                                .toLowerCase();
+                        }
+
+                        function matchesTarget(el) {
+                            const aria = normalize(
+                                el.getAttribute("aria-label"),
+                            );
+                            const txt = normalize(
+                                el.innerText || el.textContent || "",
+                            );
+                            return targetLabels.some(
+                                (label) =>
+                                    aria === label ||
+                                    txt === label ||
+                                    aria.includes(label) ||
+                                    txt.includes(label),
+                            );
+                        }
+
+                        function findName(node) {
+                            try {
+                                let current = node;
+                                while (current) {
+                                    const anchor =
+                                        current.querySelector &&
+                                        current.querySelector("a");
+                                    if (anchor) {
+                                        const text = normalize(
+                                            anchor.innerText ||
+                                                anchor.textContent ||
+                                                "",
+                                        );
+                                        if (
+                                            text &&
+                                            text.length > 1 &&
+                                            text.length < 120
+                                        ) {
+                                            return text;
+                                        }
+                                        const aria =
+                                            anchor.getAttribute &&
+                                            anchor.getAttribute("aria-label");
+                                        if (aria) {
+                                            const match = aria.match(
+                                                /Profile picture of\s+(.+)/i,
+                                            );
+                                            if (match && match[1]) {
+                                                return match[1].trim();
+                                            }
+                                        }
+                                    }
+                                    current = current.parentElement;
+                                }
+                            } catch (e) {}
+                            return "";
+                        }
+
+                        function findScrollable() {
+                            const dialogs = Array.from(
+                                document.querySelectorAll('[role="dialog"]'),
+                            );
+
+                            for (const dialog of dialogs) {
+                                const candidates = Array.from(
+                                    dialog.querySelectorAll("*"),
+                                );
+                                let best = null;
+                                let bestCount = 0;
+
+                                for (const candidate of candidates) {
+                                    if (!isVisible(candidate)) continue;
+                                    let count = 0;
+                                    for (const selector of selectors) {
+                                        count += candidate.querySelectorAll(
+                                            selector,
+                                        ).length;
+                                    }
+                                    if (count > 0) {
+                                        const style =
+                                            window.getComputedStyle(candidate) ||
+                                            {};
+                                        const overflowY = (
+                                            style.overflowY || ""
+                                        ).toLowerCase();
+                                        const scrollable =
+                                            overflowY === "auto" ||
+                                            overflowY === "scroll" ||
+                                            candidate.scrollHeight >
+                                                candidate.clientHeight;
+                                        if (scrollable) {
+                                            return candidate;
+                                        }
+                                        if (count > bestCount) {
+                                            best = candidate;
+                                            bestCount = count;
+                                        }
+                                    }
+                                }
+
+                                if (best) return best;
+                                if (dialog.scrollHeight > dialog.clientHeight) {
+                                    return dialog;
+                                }
+                            }
+
+                            return (
+                                document.scrollingElement ||
+                                document.documentElement ||
+                                document.body
+                            );
+                        }
+
+                        const scrollable = findScrollable();
+                        const clicked = [];
+                        const seenNodes = new WeakSet();
+                        let consecutiveNoNewButtons = 0;
+                        let lastScrollHeight = -1;
+
+                        while (
+                            clicked.length < maxInvites &&
+                            consecutiveNoNewButtons <= noNewButtonsLimit
+                        ) {
+                            const found = [];
+                            for (const selector of selectors) {
+                                const nodes = Array.from(
+                                    document.querySelectorAll(selector),
+                                );
+                                for (const node of nodes) {
+                                    try {
+                                        if (
+                                            !isVisible(node) ||
+                                            !matchesTarget(node)
+                                        ) {
+                                            continue;
+                                        }
+                                        if (seenNodes.has(node)) continue;
+                                        seenNodes.add(node);
+                                        found.push(node);
+                                    } catch (e) {}
+                                }
+                            }
+
+                            if (found.length === 0) {
+                                consecutiveNoNewButtons += 1;
+                            } else {
+                                consecutiveNoNewButtons = 0;
+                            }
+
+                            for (const node of found) {
+                                if (clicked.length >= maxInvites) break;
+                                try {
+                                    if (
+                                        node.getAttribute("data-invited") ===
+                                        "true"
+                                    ) {
+                                        continue;
+                                    }
+
+                                    node.scrollIntoView({
+                                        block: "center",
+                                        inline: "center",
+                                    });
+                                    await sleep(250);
+
+                                    if (!document.body.contains(node)) {
+                                        continue;
+                                    }
+
+                                    node.click();
+                                    node.setAttribute("data-invited", "true");
+                                    clicked.push({
+                                        name: findName(node),
+                                        label: normalize(
+                                            node.getAttribute("aria-label") ||
+                                                node.innerText ||
+                                                node.textContent ||
+                                                "",
+                                        ),
+                                        tag: node.tagName,
+                                    });
+
+                                    await sleep(delayMs + 500);
+                                } catch (e) {}
+                            }
+
+                            if (scrollable) {
+                                const currentScrollHeight =
+                                    scrollable.scrollHeight || 0;
+                                if (currentScrollHeight === lastScrollHeight) {
+                                    consecutiveNoNewButtons += 1;
+                                } else {
+                                    consecutiveNoNewButtons = 0;
+                                    lastScrollHeight = currentScrollHeight;
+                                }
+
+                                try {
+                                    scrollable.scrollTop = scrollable.scrollHeight;
+                                } catch (e) {}
+                                await sleep(1200);
+                            } else {
+                                await sleep(1200);
+                            }
+                        }
+
+                        return { count: clicked.length, accounts: clicked };
+                    },
+                    {
+                        maxInvites: Math.max(1, parseInt(max, 10) || 10),
+                        delayMs: Math.max(0, parseInt(delay, 10) || 0),
+                        noNewButtonsLimit: 5,
+                    },
+                );
+
+                count = inviteResult && typeof inviteResult === "object" ? inviteResult.count || 0 : 0;
+
+                try {
+                    const accounts = (inviteResult && inviteResult.accounts) || [];
+                    const outPath = path.join(
+                        process.cwd(),
+                        "data",
+                        `followed-accounts-${Date.now()}.json`,
+                    );
+                    fs.writeFileSync(outPath, JSON.stringify(accounts, null, 2), "utf8");
+                    logger.info(
+                        `Wrote ${accounts.length} followed accounts to ${outPath}`,
+                    );
+                } catch (e) {
+                    logger.error(
+                        "Failed to write followed accounts file: " +
+                            (e && e.message),
+                    );
+                }
+
+                logger.info(`invite-follow result: ${count}`);
+                await storage.saveHistory(url, count);
+                await browser.close();
+                return count;
+            }
 
             // After scrolling, collect Follow buttons using several heuristics
             const followCount = await page.evaluate(() => {
