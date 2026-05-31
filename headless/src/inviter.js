@@ -481,12 +481,7 @@ async function runWithBrowser({
 
             if ((inviteFollow || dryRun) && !countFollow) {
                 const inviteResult = await page.evaluate(
-                    async ({
-                        maxInvites,
-                        delayMs,
-                        noNewButtonsLimit,
-                        simulateOnly,
-                    }) => {
+                    async ({ simulateOnly }) => {
                         const targetLabels = ["pozvat", "invite"];
 
                         const selectors = [
@@ -498,12 +493,6 @@ async function runWithBrowser({
                             'div[role="button"]',
                             'a[role="button"]',
                         ];
-
-                        function sleep(ms) {
-                            return new Promise((resolve) =>
-                                setTimeout(resolve, ms),
-                            );
-                        }
 
                         function isVisible(el) {
                             if (!el) return false;
@@ -637,80 +626,31 @@ async function runWithBrowser({
                             );
                         }
 
-                        const scrollable = findScrollable();
                         const clicked = [];
-                        const seenNodes = new WeakSet();
-                        let consecutiveNoNewButtons = 0;
-                        let lastScrollHeight = -1;
-
-                        while (
-                            clicked.length < maxInvites &&
-                            consecutiveNoNewButtons <= noNewButtonsLimit
-                        ) {
-                            const found = [];
-                            for (const selector of selectors) {
-                                const nodes = Array.from(
-                                    document.querySelectorAll(selector),
-                                );
-                                for (const node of nodes) {
-                                    try {
-                                        if (
-                                            !isVisible(node) ||
-                                            !matchesTarget(node)
-                                        ) {
-                                            continue;
-                                        }
-                                        if (seenNodes.has(node)) continue;
-                                        seenNodes.add(node);
-                                        found.push(node);
-                                    } catch (e) {}
-                                }
-                            }
-
-                            if (found.length === 0) {
-                                consecutiveNoNewButtons += 1;
-                            } else {
-                                consecutiveNoNewButtons = 0;
-                            }
-
-                            for (const node of found) {
-                                if (clicked.length >= maxInvites) break;
+                        const root = findScrollable();
+                        const nodes = [];
+                        for (const selector of selectors) {
+                            const scope = root || document;
+                            const matches = Array.from(
+                                scope.querySelectorAll(selector),
+                            );
+                            for (const node of matches) {
                                 try {
                                     if (
-                                        node.getAttribute("data-invited") ===
-                                        "true"
+                                        !isVisible(node) ||
+                                        !matchesTarget(node)
                                     ) {
                                         continue;
                                     }
+                                    nodes.push(node);
+                                } catch (e) {}
+                            }
+                        }
 
-                                    node.scrollIntoView({
-                                        block: "center",
-                                        inline: "center",
-                                    });
-                                    await sleep(250);
-
-                                    if (!document.body.contains(node)) {
-                                        continue;
-                                    }
-
-                                    if (simulateOnly) {
-                                        clicked.push({
-                                            name: findName(node),
-                                            label: normalize(
-                                                node.getAttribute(
-                                                    "aria-label",
-                                                ) ||
-                                                    node.innerText ||
-                                                    node.textContent ||
-                                                    "",
-                                            ),
-                                            tag: node.tagName,
-                                        });
-                                        continue;
-                                    }
-
-                                    node.click();
-                                    node.setAttribute("data-invited", "true");
+                        const uniqueNodes = Array.from(new Set(nodes));
+                        for (const node of uniqueNodes) {
+                            try {
+                                if (simulateOnly) {
                                     clicked.push({
                                         name: findName(node),
                                         label: normalize(
@@ -721,37 +661,27 @@ async function runWithBrowser({
                                         ),
                                         tag: node.tagName,
                                     });
-
-                                    await sleep(delayMs + 500);
-                                } catch (e) {}
-                            }
-
-                            if (scrollable) {
-                                const currentScrollHeight =
-                                    scrollable.scrollHeight || 0;
-                                if (currentScrollHeight === lastScrollHeight) {
-                                    consecutiveNoNewButtons += 1;
-                                } else {
-                                    consecutiveNoNewButtons = 0;
-                                    lastScrollHeight = currentScrollHeight;
+                                    continue;
                                 }
 
-                                try {
-                                    scrollable.scrollTop =
-                                        scrollable.scrollHeight;
-                                } catch (e) {}
-                                await sleep(1200);
-                            } else {
-                                await sleep(1200);
-                            }
+                                node.click();
+                                node.setAttribute("data-invited", "true");
+                                clicked.push({
+                                    name: findName(node),
+                                    label: normalize(
+                                        node.getAttribute("aria-label") ||
+                                            node.innerText ||
+                                            node.textContent ||
+                                            "",
+                                    ),
+                                    tag: node.tagName,
+                                });
+                            } catch (e) {}
                         }
 
                         return { count: clicked.length, accounts: clicked };
                     },
                     {
-                        maxInvites: Math.max(1, parseInt(max, 10) || 1000),
-                        delayMs: Math.max(0, parseInt(delay, 10) || 0),
-                        noNewButtonsLimit: 5,
                         simulateOnly: dryRun,
                     },
                 );
