@@ -8,17 +8,12 @@ const fs = require("fs");
 const path = require("path");
 
 const DEFAULT_SELECTORS = [
-    'div[aria-label="Follow"][role="button"]',
-    'div[aria-label="Sledovat"][role="button"]',
     'div[aria-label="Pozvat"][role="button"]',
-    'div[aria-label="Add friend"][role="button"]',
-    'button[aria-label="Follow"]',
-    'button[aria-label="Sledovat"]',
     'button[aria-label="Pozvat"]',
-    'button[aria-label="Add friend"]',
-    'a[role="button"][aria-label*="Follow"]',
-    'a[role="button"][aria-label*="Sledovat"]',
-    'a[role="button"][aria-label*="Add friend"]',
+    'a[role="button"][aria-label*="Pozvat"]',
+    'div[aria-label="Invite"][role="button"]',
+    'button[aria-label="Invite"]',
+    'a[role="button"][aria-label*="Invite"]',
 ];
 
 function formatLaunchOptions(launchOptions) {
@@ -492,15 +487,7 @@ async function runWithBrowser({
                         noNewButtonsLimit,
                         simulateOnly,
                     }) => {
-                        const targetLabels = [
-                            "sledovat",
-                            "follow",
-                            "pozvat",
-                            "invite",
-                            "add friend",
-                            "přidat přítele",
-                            "přidat do přátel",
-                        ];
+                        const targetLabels = ["pozvat", "invite"];
 
                         const selectors = [
                             "button[aria-label]",
@@ -777,9 +764,12 @@ async function runWithBrowser({
                 try {
                     const accounts =
                         (inviteResult && inviteResult.accounts) || [];
+                    const invitedNames = accounts
+                        .map((account) => account && account.name)
+                        .filter((name) => typeof name === "string" && name);
                     const filePrefix = dryRun
                         ? "scanned-accounts"
-                        : "followed-accounts";
+                        : "invited-people";
                     const outPath = path.join(
                         process.cwd(),
                         "data",
@@ -787,11 +777,11 @@ async function runWithBrowser({
                     );
                     fs.writeFileSync(
                         outPath,
-                        JSON.stringify(accounts, null, 2),
+                        JSON.stringify(invitedNames, null, 2),
                         "utf8",
                     );
                     logger.info(
-                        `Wrote ${accounts.length} ${dryRun ? "scanned" : "followed"} accounts to ${outPath}`,
+                        `${dryRun ? "Scanned" : "Invited"} ${invitedNames.length} people`,
                     );
                 } catch (e) {
                     logger.error(

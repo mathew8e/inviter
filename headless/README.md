@@ -17,7 +17,7 @@ npm ci
 node src/index.js --url "https://www.facebook.com/..." --max 10 --delay 1000 --profile-dir ./profile
 ```
 
-To click the localized follow buttons on the reactions list instead of only counting them, use:
+To click invite buttons only on the list, use:
 
 ```bash
 node src/index.js --url "https://www.facebook.com/..." --profile-dir ./profile --invite-follow --headless=false

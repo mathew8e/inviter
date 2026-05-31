@@ -25,6 +25,10 @@ function getLaunchOptions(profileDir, headless) {
     const opts = {
         headless: headless !== undefined ? headless : true,
         args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        protocolTimeout: Number.parseInt(
+            process.env.PUPPETEER_PROTOCOL_TIMEOUT || "300000",
+            10,
+        ),
     };
 
     if (profileDir) opts.userDataDir = profileDir;

@@ -47,8 +47,7 @@ async function main() {
         .option("invite-follow", {
             type: "boolean",
             default: false,
-            describe:
-                "Click clickable 'Follow' / 'Sledovat' buttons on the reactions list",
+            describe: "Click clickable invite buttons only on the list",
         })
         .option("dry-run", {
             type: "boolean",
