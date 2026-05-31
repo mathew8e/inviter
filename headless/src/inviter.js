@@ -481,7 +481,7 @@ async function runWithBrowser({
 
             if ((inviteFollow || dryRun) && !countFollow) {
                 const inviteResult = await page.evaluate(
-                    async ({ simulateOnly }) => {
+                    async ({ simulateOnly, scrollRounds }) => {
                         const targetLabels = ["pozvat", "invite"];
 
                         const selectors = [
@@ -628,29 +628,47 @@ async function runWithBrowser({
 
                         const clicked = [];
                         const root = findScrollable();
-                        const nodes = [];
-                        for (const selector of selectors) {
-                            const scope = root || document;
-                            const matches = Array.from(
-                                scope.querySelectorAll(selector),
-                            );
-                            for (const node of matches) {
+                        let lastScrollTop = -1;
+
+                        for (let round = 0; round < scrollRounds; round++) {
+                            const nodes = [];
+                            for (const selector of selectors) {
+                                const scope = root || document;
+                                const matches = Array.from(
+                                    scope.querySelectorAll(selector),
+                                );
+                                for (const node of matches) {
+                                    try {
+                                        if (
+                                            !isVisible(node) ||
+                                            !matchesTarget(node)
+                                        ) {
+                                            continue;
+                                        }
+                                        nodes.push(node);
+                                    } catch (e) {}
+                                }
+                            }
+
+                            const uniqueNodes = Array.from(new Set(nodes));
+                            for (const node of uniqueNodes) {
                                 try {
-                                    if (
-                                        !isVisible(node) ||
-                                        !matchesTarget(node)
-                                    ) {
+                                    if (simulateOnly) {
+                                        clicked.push({
+                                            name: findName(node),
+                                            label: normalize(
+                                                node.getAttribute("aria-label") ||
+                                                    node.innerText ||
+                                                    node.textContent ||
+                                                    "",
+                                            ),
+                                            tag: node.tagName,
+                                        });
                                         continue;
                                     }
-                                    nodes.push(node);
-                                } catch (e) {}
-                            }
-                        }
 
-                        const uniqueNodes = Array.from(new Set(nodes));
-                        for (const node of uniqueNodes) {
-                            try {
-                                if (simulateOnly) {
+                                    node.click();
+                                    node.setAttribute("data-invited", "true");
                                     clicked.push({
                                         name: findName(node),
                                         label: normalize(
@@ -661,28 +679,28 @@ async function runWithBrowser({
                                         ),
                                         tag: node.tagName,
                                     });
-                                    continue;
-                                }
+                                } catch (e) {}
+                            }
 
-                                node.click();
-                                node.setAttribute("data-invited", "true");
-                                clicked.push({
-                                    name: findName(node),
-                                    label: normalize(
-                                        node.getAttribute("aria-label") ||
-                                            node.innerText ||
-                                            node.textContent ||
-                                            "",
-                                    ),
-                                    tag: node.tagName,
-                                });
-                            } catch (e) {}
+                            if (root && root.scrollHeight > root.clientHeight) {
+                                const currentTop = root.scrollTop || 0;
+                                const nextTop =
+                                    currentTop + Math.max(200, Math.floor(root.clientHeight * 0.8));
+                                root.scrollTop = nextTop;
+                                if (root.scrollTop === lastScrollTop) {
+                                    break;
+                                }
+                                lastScrollTop = root.scrollTop;
+                            } else {
+                                window.scrollBy(0, Math.max(200, window.innerHeight * 0.8));
+                            }
                         }
 
                         return { count: clicked.length, accounts: clicked };
                     },
                     {
                         simulateOnly: dryRun,
+                        scrollRounds: dryRun ? 2 : 5,
                     },
                 );
 
