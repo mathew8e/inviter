@@ -23,6 +23,12 @@ To click the localized follow buttons on the reactions list instead of only coun
 node src/index.js --url "https://www.facebook.com/..." --profile-dir ./profile --invite-follow --headless=false
 ```
 
+To do a no-click test run that scans and saves matching accounts without inviting, use:
+
+```bash
+node src/index.js --url "https://www.facebook.com/..." --profile-dir ./profile --dry-run --headless=false
+```
+
 3. Docker (build + run)
 
 ```bash

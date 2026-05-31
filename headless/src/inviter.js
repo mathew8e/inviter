@@ -41,6 +41,7 @@ async function runWithBrowser({
     waitForLogin = false,
     countFollow = false,
     inviteFollow = false,
+    dryRun = false,
 }) {
     const launchOptions = session.getLaunchOptions(profileDir, headless);
     logger.info(
@@ -87,11 +88,13 @@ async function runWithBrowser({
         // Give page some time to render dynamic content
         await page.waitForTimeout(2000);
 
-        if (countFollow || inviteFollow) {
+        if (countFollow || inviteFollow || dryRun) {
             logger.info(
-                inviteFollow
-                    ? "Running invite-follow mode: will click reactions opener and click Follow / Add friend buttons."
-                    : "Running count-follow mode: will click reactions opener and count Follow buttons.",
+                dryRun
+                    ? "Running dry-run mode: will scan the list and save matches without clicking buttons."
+                    : inviteFollow
+                      ? "Running invite-follow mode: will click reactions opener and click Follow / Add friend buttons."
+                      : "Running count-follow mode: will click reactions opener and count Follow buttons.",
             );
 
             // Try clicking the 'All reactions' opener or toolbar that reveals people who reacted
@@ -481,9 +484,14 @@ async function runWithBrowser({
                 }
             });
 
-            if (inviteFollow && !countFollow) {
+            if ((inviteFollow || dryRun) && !countFollow) {
                 const inviteResult = await page.evaluate(
-                    async ({ maxInvites, delayMs, noNewButtonsLimit }) => {
+                    async ({
+                        maxInvites,
+                        delayMs,
+                        noNewButtonsLimit,
+                        simulateOnly,
+                    }) => {
                         const targetLabels = [
                             "sledovat",
                             "follow",
@@ -698,6 +706,22 @@ async function runWithBrowser({
                                         continue;
                                     }
 
+                                    if (simulateOnly) {
+                                        clicked.push({
+                                            name: findName(node),
+                                            label: normalize(
+                                                node.getAttribute(
+                                                    "aria-label",
+                                                ) ||
+                                                    node.innerText ||
+                                                    node.textContent ||
+                                                    "",
+                                            ),
+                                            tag: node.tagName,
+                                        });
+                                        continue;
+                                    }
+
                                     node.click();
                                     node.setAttribute("data-invited", "true");
                                     clicked.push({
@@ -741,6 +765,7 @@ async function runWithBrowser({
                         maxInvites: Math.max(1, parseInt(max, 10) || 1000),
                         delayMs: Math.max(0, parseInt(delay, 10) || 0),
                         noNewButtonsLimit: 5,
+                        simulateOnly: dryRun,
                     },
                 );
 
@@ -752,10 +777,13 @@ async function runWithBrowser({
                 try {
                     const accounts =
                         (inviteResult && inviteResult.accounts) || [];
+                    const filePrefix = dryRun
+                        ? "scanned-accounts"
+                        : "followed-accounts";
                     const outPath = path.join(
                         process.cwd(),
                         "data",
-                        `followed-accounts-${Date.now()}.json`,
+                        `${filePrefix}-${Date.now()}.json`,
                     );
                     fs.writeFileSync(
                         outPath,
@@ -763,7 +791,7 @@ async function runWithBrowser({
                         "utf8",
                     );
                     logger.info(
-                        `Wrote ${accounts.length} followed accounts to ${outPath}`,
+                        `Wrote ${accounts.length} ${dryRun ? "scanned" : "followed"} accounts to ${outPath}`,
                     );
                 } catch (e) {
                     logger.error(
@@ -772,7 +800,9 @@ async function runWithBrowser({
                     );
                 }
 
-                logger.info(`invite-follow result: ${count}`);
+                logger.info(
+                    `${dryRun ? "dry-run" : "invite-follow"} result: ${count}`,
+                );
                 await storage.saveHistory(url, count);
                 await browser.close();
                 return count;

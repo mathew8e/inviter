@@ -50,6 +50,12 @@ async function main() {
             describe:
                 "Click clickable 'Follow' / 'Sledovat' buttons on the reactions list",
         })
+        .option("dry-run", {
+            type: "boolean",
+            default: false,
+            describe:
+                "Scan and save matching accounts without clicking any invite/follow buttons",
+        })
         .help().argv;
 
     await storage.init();
@@ -64,6 +70,7 @@ async function main() {
             waitForLogin: argv["wait-for-login"],
             countFollow: argv["count-follow"],
             inviteFollow: argv["invite-follow"],
+            dryRun: argv["dry-run"],
         });
         logger.info(`Run finished. total actions: ${count}`);
         process.exit(0);
