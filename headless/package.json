@@ -1,18 +1,15 @@
 {
   "name": "inviter-headless",
   "version": "0.1.0",
-  "description": "Headless service to follow users who reacted to a post (Puppeteer CLI)",
-  "main": "src/index.js",
+  "description": "Puppeteer login tool — simplified version",
+  "main": "src/login.js",
   "scripts": {
-    "start": "node src/index.js",
-    "cli": "node src/index.js"
+    "start": "node src/login.js",
+    "login": "node src/login.js"
   },
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "install": "^0.13.0",
-    "puppeteer": "^21.0.0",
-    "winston": "^3.9.0",
-    "yargs": "^17.7.2"
+    "puppeteer": "^21.0.0"
   }
 }

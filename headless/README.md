@@ -1,8 +1,15 @@
 # Inviter Headless
 
-This folder contains a minimal headless Node.js service (Puppeteer) that ports the extension's invite/follow automation to a server environment.
+## Overview
 
-Quick start (local):
+This folder contains a Puppeteer-based headless automation tool that scans Facebook posts/profiles and automatically sends invite requests to users. It uses configurable selectors to find and click invite buttons (`Pozvat`/`Invite`).
+
+Key features preserved:
+
+- **Invite from posts**: Scan a post URL and invite reactors
+- **Profile persistence**: Reuse browser sessions via Chrome profile directory
+
+## Quick start
 
 1. Install dependencies
 
@@ -11,25 +18,23 @@ cd headless
 npm ci
 ```
 
-2. Run CLI (example)
+2. Run CLI
 
 ```bash
 node src/index.js --url "https://www.facebook.com/..." --max 10 --delay 1000 --profile-dir ./profile
 ```
 
-To click invite buttons only on the list, use:
+Options:
 
-```bash
-node src/index.js --url "https://www.facebook.com/..." --profile-dir ./profile --invite-follow --headless=false
-```
+| Option          | Type    | Default    | Description                            |
+| --------------- | ------- | ---------- | -------------------------------------- |
+| `--url`         | string  | (required) | Post URL to scan                       |
+| `--max`         | number  | 1000       | Max invites before stopping            |
+| `--delay`       | number  | 1000       | Base delay between clicks (ms)         |
+| `--profile-dir` | string  | —          | Path to Chrome profile for login reuse |
+| `--headless`    | boolean | true       | Run browser in headless mode           |
 
-To do a no-click test run that scans and saves matching accounts without inviting, use:
-
-```bash
-node src/index.js --url "https://www.facebook.com/..." --profile-dir ./profile --dry-run --headless=false
-```
-
-3. Docker (build + run)
+3. Docker
 
 ```bash
 docker build -t inviter-headless .
@@ -38,5 +43,5 @@ docker run --rm -v $(pwd)/data:/usr/src/app/data -v $(pwd)/profile:/usr/src/app/
 
 Notes:
 
-- The service expects a browser profile with an active login if you use `--profile-dir` (recommended for MVP).
+- Use a browser profile with an active login via `--profile-dir` for session reuse.
 - Database file is created at `headless/data/invites.db` by default.
