@@ -24,7 +24,25 @@ function findCachedLinuxChrome() {
 function getLaunchOptions(profileDir, headless) {
     const opts = {
         headless: headless !== undefined ? headless : true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-gpu",
+            "--no-first-run",
+            "--disable-background-networking",
+            "--disable-default-apps",
+            "--disable-sync",
+            "--disable-device-discovery-notifications",
+            "--disable-blink-features=AutomationControlled",
+            "--force-color-profile=srgb",
+            "--disable-extensions",
+            "--disable-default-apps",
+            "--mute-audio",
+            "--metrics-recording-only",
+            "--disable-client-side-phishing-detection",
+            "--enable-features=NetworkService,NetworkServiceInProcess",
+            "--disable-features=InterestFeedContentSuggestions",
+        ],
         protocolTimeout: Number.parseInt(
             process.env.PUPPETEER_PROTOCOL_TIMEOUT || "300000",
             10,

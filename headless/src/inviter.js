@@ -61,6 +61,26 @@ async function runWithBrowser({
             `Navigation finished: status=${response ? response.status() : "n/a"}, finalUrl=${page.url()}`,
         );
 
+        // Inject CSS to fix rendering issues and ensure proper contrast
+        await page
+            .evaluate(() => {
+                const style = document.createElement("style");
+                style.textContent = `
+                * {
+                    color-scheme: light !important;
+                }
+                html, body {
+                    background-color: #ffffff !important;
+                    color: #000000 !important;
+                }
+                :root {
+                    color-scheme: light !important;
+                }
+            `;
+                document.head.appendChild(style);
+            })
+            .catch(() => {});
+
         const title = await page.title().catch(() => "n/a");
         logger.info(`Page title: ${title}`);
 
@@ -657,7 +677,9 @@ async function runWithBrowser({
                                         clicked.push({
                                             name: findName(node),
                                             label: normalize(
-                                                node.getAttribute("aria-label") ||
+                                                node.getAttribute(
+                                                    "aria-label",
+                                                ) ||
                                                     node.innerText ||
                                                     node.textContent ||
                                                     "",
@@ -685,14 +707,21 @@ async function runWithBrowser({
                             if (root && root.scrollHeight > root.clientHeight) {
                                 const currentTop = root.scrollTop || 0;
                                 const nextTop =
-                                    currentTop + Math.max(200, Math.floor(root.clientHeight * 0.8));
+                                    currentTop +
+                                    Math.max(
+                                        200,
+                                        Math.floor(root.clientHeight * 0.8),
+                                    );
                                 root.scrollTop = nextTop;
                                 if (root.scrollTop === lastScrollTop) {
                                     break;
                                 }
                                 lastScrollTop = root.scrollTop;
                             } else {
-                                window.scrollBy(0, Math.max(200, window.innerHeight * 0.8));
+                                window.scrollBy(
+                                    0,
+                                    Math.max(200, window.innerHeight * 0.8),
+                                );
                             }
                         }
 
