@@ -23,7 +23,7 @@ function findCachedLinuxChrome() {
 
 function getLaunchOptions(profileDir, headless) {
     const opts = {
-        headless: headless !== undefined ? headless : true,
+        headless: headless !== undefined ? (headless === false ? false : "new") : "new",
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
