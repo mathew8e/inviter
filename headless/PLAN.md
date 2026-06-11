@@ -1,6 +1,6 @@
 # PLAN.md — Inviter Headless
 
-> **Last updated:** 2026-06-11
+> **Last updated:** 2026-06-11 (Phase 0–3 complete, Phase 4 next)
 > **Target environment:** HP Ubuntu Server (Ubuntu 20.x, 4–8 GB RAM, home network attic)
 > **Purpose:** Automatically invite everyone who reacts to a politician's Facebook posts to follow the page
 > **Auth method:** Facebook Business Suite (delegated page access)
@@ -49,15 +49,24 @@ The `headless/` folder already has:
 
 | File | Status |
 |------|--------|
-| `src/index.js` | CLI with `--url`, `--max`, `--delay`, `--profile-dir`, `--headless`, `--wait-for-login` |
-| `src/inviter.js` | Basic Puppeteer automation: navigate → scan buttons → click |
-| `src/session.js` | Chrome launch config, Linux Chrome discovery |
-| `src/storage.js` | JSON persistence for invite history |
-| `src/logger.js` | Winston console logger |
+| `src/index.js` | Existing — CLI entry (to be updated Phase 7) |
+| `src/inviter.js` | Existing — basic automation (to be refactored Phase 6) |
+| `src/session.js` | Existing — Chrome launch, headless: "new" ✅ |
+| `src/storage.js` | Existing — JSON persistence (to be enhanced Phase 8) |
+| `src/logger.js` | Existing — Winston console (to be enhanced Phase 9) |
+| `src/config.js` | ✅ NEW (Phase 0) — central config, rate mode table |
+| `src/rate-limiter.js` | ✅ NEW (Phase 1) — daily budget, cooldowns, lock file |
+| `src/auth.js` | ✅ NEW (Phase 2) — login verify, page nav, session watcher |
+| `src/scraper.js` | ✅ NEW (Phase 3) — post discovery, date parsing, dedup |
+| `test/phase1-test.js` | ✅ Phase 1 tests (24 passing) |
+| `test/phase3-test.js` | ✅ Phase 3 integration test (auth + scraper) |
 | `Dockerfile` | Node 20 + Chromium deps |
 | `docker-compose.yml` | Volume mounts for data/profile |
+| `RULES.md` | ✅ Project conventions, step-by-step breakdown |
 
-**What's missing:** Reactions popup opening, dialog scroll loop, post discovery from page feed, delegated page navigation, rate limiting, cron scheduling, date range filtering, configurable rate limit modes.
+**What's done:** Configuration, rate limiting, authentication, post discovery/scraping. Tested headless against real Facebook page (PiratDanielKus). 20 posts scraped with correct URLs and dates.
+
+**What's next (Phase 4):** Mock reactions dialog HTML for safe testing before building the real invite-clicking logic.
 
 ---
 

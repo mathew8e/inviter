@@ -1,7 +1,7 @@
 # Project Context: Inviter Headless
 
 > Generated: 2026-06-11
-> Updated: 2026-06-11 (after Phase 0–1 implementation)
+> Updated: 2026-06-11 (after Phase 0–3, scraper working against real page)
 
 ---
 
@@ -9,25 +9,27 @@
 
 **Inviter Headless** is a Puppeteer-based Node.js automation tool that scans Facebook Page posts and automatically invites people who reacted (but don't yet follow) to follow the Page. It runs on a headless Ubuntu server via cron, respects strict rate limits, and operates in two phases: (1) scrape post list from page feed, (2) open reactions popup on each post and click Invite (`Pozvat`) buttons.
 
-**Planning documents:** `PLAN.md` (architecture & design), `RULES.md` (conventions, phased breakdown, testing strategy, two-phase execution model).
+**Milestone A reached (Phase 3 complete):** The scraper authenticates, discovers posts from the real politician's page (`PiratDanielKus`), extracts URLs and dates, and saves to `data/posts.json`. Tested working in both visible and headless modes.
+
+**Planning documents:** `PLAN.md` (architecture & design), `RULES.md` (conventions, phased breakdown, testing strategy, two-phase execution model). Milestone links: see Section 4 (Core Workflow) and Section 5 (Module-by-Module) in PLAN.md.
 
 ---
 
 ## Implementation Progress
 
-| Phase | Module | Status | Date |
-|-------|--------|--------|------|
-| 0 | `src/config.js` | ✅ Done | 2026-06-11 |
-| 1 | `src/rate-limiter.js` + `test/phase1-test.js` | ✅ Done | 2026-06-11 |
-| 2 | `src/auth.js` | ⬜ Pending | — |
-| 3 | `src/scraper.js` | ⬜ Pending | — |
-| 4 | `test/mock-reactions-dialog.html` | ⬜ Pending | — |
-| 5 | `src/reactions.js` | ⬜ Pending | — |
-| 6 | `src/inviter.js` (refactor) | ⬜ Pending | — |
-| 7 | `src/index.js` (CLI update) | ⬜ Pending | — |
-| 8 | `src/storage.js` (enhance) | ⬜ Pending | — |
-| 9 | `src/logger.js` (file transport) | ⬜ Pending | — |
-| 10 | Cron & deployment finalization | ⬜ Pending | — |
+| Phase | Module | Status | Date | Notes |
+|-------|--------|--------|------|-------|
+| 0 | `src/config.js` | ✅ Done | 2026-06-11 | Rate mode table, env vars, single source of truth |
+| 1 | `src/rate-limiter.js` + `test/phase1-test.js` | ✅ Done | 2026-06-11 | Daily budget, cooldowns, atomic lock file, 24 tests |
+| 2 | `src/auth.js` | ✅ Done | 2026-06-11 | Login verify, page nav, mid-run session watcher |
+| 3 | `src/scraper.js` + `test/phase3-test.js` | ✅ Done | 2026-06-11 | Post discovery, date parsing, headless-ready |
+| 4 | `test/mock-reactions-dialog.html` | ⬜ **NEXT** | — | Mock Facebook reactions popup for safe testing |
+| 5 | `src/reactions.js` | ⬜ Pending | — | Popup open, scroll loop, invite clicking |
+| 6 | `src/inviter.js` (refactor) | ⬜ Pending | — | Orchestrator wiring all modules together |
+| 7 | `src/index.js` (CLI update) | ⬜ Pending | — | New flags: --page, --dry-run, --date-from, --rate-mode |
+| 8 | `src/storage.js` (enhance) | ⬜ Pending | — | Post list persistence, no peopleNames |
+| 9 | `src/logger.js` (file transport) | ⬜ Pending | — | File transport + 30-day log rotation |
+| 10 | Cron & deployment finalization | ⬜ Pending | — | Lock file, crontab, session renewal |
 
 ---
 
@@ -123,29 +125,26 @@ D:\MASTER_FOLDER\PROJECTS\DIGITAL\CODE_PERSONAL\inviter\headless\
 - **Config passthrough**: `getLimitPerPost()`, `getRunTimeCap()`, `getPostCooldown()` for convenience.
 - **24 unit tests** in `test/phase1-test.js` cover all functions without needing Puppeteer.
 
-**Rate limit text patterns (12 total):**
+### 3. `src/auth.js` — Authentication (NEW, Phase 2)
 
-| Lang | Pattern |
-|------|---------|
-| EN | `you are doing that too much` |
-| EN | `rate limit exceeded` |
-| EN | `blocked temporarily` |
-| EN | `this action is temporarily blocked` |
-| EN | `please try again later` |
-| EN | `you have been temporarily blocked` |
-| EN | `slow down` |
-| EN | `too many requests` |
-| CZ | `děláš to příliš často` |
-| CZ | `dočasně zablokováno` |
-| CZ | `tato akce je dočasně zablokována` |
-| CZ | `zkus to znovu později` |
-| CZ | `zpomal` |
-| CZ | `příliš mnoho požadavků` |
+- **`ensureLoggedIn(page)`**: Navigates to facebook.com, checks URL for `/login/` redirects, checks page title ("Log in to Facebook"), scans DOM for logged-in indicators. Throws `SessionExpiredError` if session is invalid.
+- **`navigateToPage(page, pageUrl)`**: Navigates to Page URL, verifies it loaded (no "page not found" text).
+- **`setupNavigationWatcher(page)`**: Listens for `framenavigated` events. If URL redirects to `/login/` mid-run, closes the page causing a clean error.
+- **Tested**: Against real `PiratDanielKus` page with valid Business Suite session.
 
-### 3. `src/index.js` — CLI Entry Point
+### 4. `src/scraper.js` — Post Discovery (NEW, Phase 3 — MILESTONE A)
 
-- Uses **yargs** for argument parsing.
-- Options:
+- **`discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts)`**: Main entry point. Clicks tab (Posts/All/Příspěvky), scrolls to load posts, extracts URLs + dates, saves to `data/posts.json`.
+- **Tab detection**: Tries "Posts", "Příspěvky", "All". Managed pages (Business Suite) use "All".
+- **Scrolling**: `scrollToBottom()` — scrolls to `document.body.scrollHeight`, detects growth. Stops after 4 consecutive scrolls with no new content.
+- **Post URL discovery**: (1) Time-text links — `<a>` with text like "5d", "1w", "Yesterday at 2:22 AM" (these ARE post timestamps). (2) URL patterns — `/reel/NUMBER`, `/posts/pfbid...`, `/photo/?fbid=NUMBER`.
+- **Date parsing**: Handles relative ("5d", "1w"), absolute words ("Yesterday", "Today"), absolute dates ("May 23 at 7:36 PM"), `data-utime`. Outputs `YYYY-MM-DD`.
+- **Deduplication**: URLs cleaned (params stripped), checked against `alreadySeen` across scrolls, merged with existing `posts.json`.
+- **Filtering**: Excludes dashboard, groups, inbox, settings, photo albums, page URL itself.
+- **Test results**: 20 posts from `PiratDanielKus` in headless. All URLs clean (`/reel/` or `/posts/pfbid`). 19/20 dates correct. Zero false positives.
+- **Test script**: `test/phase3-test.js`. Usage: `node test/phase3-test.js --page URL --max N [--visible] [--date-from YYYY-MM-DD]`.
+
+### 5. `src/index.js` — CLI Entry Point (to be updated Phase 7)
   | Flag | Type | Default | Description |
   |---|---|---|---|
   | `--url` | string | **(required)** | Facebook post URL to scan |
