@@ -32,6 +32,12 @@ async function main() {
             default: true,
             describe: "Run browser in headless mode",
         })
+        .option("wait-for-login", {
+            type: "boolean",
+            default: false,
+            describe:
+                "Open the browser VISIBLY so you can log in manually, then press Enter to save the session",
+        })
         .help().argv;
 
     await storage.init();
@@ -43,8 +49,12 @@ async function main() {
             delay: argv.delay,
             profileDir: argv["profile-dir"],
             headless: argv.headless,
+            waitForLogin: argv["wait-for-login"],
         });
-        logger.info(`Run finished. total actions: ${count}`);
+
+        if (!argv["wait-for-login"]) {
+            logger.info(`Run finished. total actions: ${count}`);
+        }
         process.exit(0);
     } catch (err) {
         logger.error("Run failed: " + err.message);

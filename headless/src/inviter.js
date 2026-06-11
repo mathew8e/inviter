@@ -13,6 +13,8 @@
  */
 
 const puppeteer = require("puppeteer");
+const readline = require("readline/promises");
+const { stdin, stdout } = require("process");
 const logger = require("./logger");
 const storage = require("./storage");
 const session = require("./session");
@@ -272,6 +274,35 @@ async function clickInviteButtonsInPage(selectors, max, delay) {
 }
 
 // ──────────────────────────────────────────────
+// LOGIN MODE: Let you log in manually
+// ──────────────────────────────────────────────
+
+/**
+ * Opens the browser and lets you log in to Facebook manually.
+ * The browser shows up on your screen (not hidden) so you can see it.
+ * Once logged in, press Enter in the terminal. The session saves to the profile folder.
+ *
+ * @param {object} page — The browser page (already on Facebook)
+ */
+async function waitForManualLogin(page) {
+    logger.info("=".repeat(60));
+    logger.info("FACEBOOK LOGIN — Browser is now open on your screen.");
+    logger.info("1. Log in to Facebook in that browser window.");
+    logger.info("2. Come back to this terminal.");
+    logger.info("3. Press ENTER to save the session and close the browser.");
+    logger.info("=".repeat(60));
+
+    const rl = readline.createInterface({
+        input: stdin,
+        output: stdout,
+    });
+    await rl.question("");
+    rl.close();
+
+    logger.info("Login session saved. You can now run the tool without --wait-for-login.");
+}
+
+// ──────────────────────────────────────────────
 // THE MAIN FUNCTION — Ties everything together
 // ──────────────────────────────────────────────
 
@@ -282,12 +313,13 @@ async function clickInviteButtonsInPage(selectors, max, delay) {
  *   1. Heat up the oven     → launch the browser
  *   2. Put the pan in       → open a new tab
  *   3. Go to the right page → navigate to the Facebook post
- *   4. Fix the lighting     → force light mode
- *   5. Let it preheat       → wait for stuff to load
- *   6. Count the cookies    → scan for buttons
- *   7. Eat the cookies      → click the buttons
- *   8. Write it down        → save what we did
- *   9. Clean up             → close the browser
+ *   4. If login mode        → wait for you to press Enter, then exit
+ *   5. Fix the lighting     → force light mode
+ *   6. Let it preheat       → wait for stuff to load
+ *   7. Count the cookies    → scan for buttons
+ *   8. Eat the cookies      → click the buttons
+ *   9. Write it down        → save what we did
+ *  10. Clean up             → close the browser
  *
  * @param {object} options
  * @param {string} options.url — Facebook post URL
@@ -295,7 +327,8 @@ async function clickInviteButtonsInPage(selectors, max, delay) {
  * @param {number} [options.delay=1000] — Delay between clicks (ms)
  * @param {string} [options.profileDir] — Chrome profile folder
  * @param {boolean} [options.headless=true] — Run invisible
- * @returns {Promise<number>} count — How many buttons were clicked
+ * @param {boolean} [options.waitForLogin=false] — Just log in, don't run automation
+ * @returns {Promise<number>} count — How many buttons were clicked (0 if login mode)
  */
 async function runWithBrowser({
     url,
@@ -303,9 +336,14 @@ async function runWithBrowser({
     delay = 1000,
     profileDir,
     headless = true,
+    waitForLogin = false,
 }) {
+    // ── Login mode: force the browser to show so you can see it ──
+    const isLoginMode = waitForLogin === true;
+    const effectiveHeadless = isLoginMode ? false : headless;
+
     // ── Step 1: Launch the browser ──
-    const browser = await launchBrowser({ profileDir, headless });
+    const browser = await launchBrowser({ profileDir, headless: effectiveHeadless });
 
     let count = 0;
 
@@ -313,16 +351,22 @@ async function runWithBrowser({
         // ── Step 2: Open a tab and go to the page ──
         const page = await createPageAndNavigate(browser, url);
 
-        // ── Step 3: Fix dark mode issues ──
+        // ── Step 3: If login mode, pause and wait for you ──
+        if (isLoginMode) {
+            await waitForManualLogin(page);
+            return 0; // Exit early — no automation, just saving session
+        }
+
+        // ── Step 4: Fix dark mode issues ──
         await forceLightColorScheme(page);
 
-        // ── Step 4: Wait for everything to load ──
+        // ── Step 5: Wait for everything to load ──
         await waitForPageToSettle(page);
 
-        // ── Step 5: Look for invite buttons (just counting, not clicking) ──
+        // ── Step 6: Look for invite buttons (just counting, not clicking) ──
         await scanInviteButtons(page, DEFAULT_SELECTORS);
 
-        // ── Step 6: Actually click the buttons ──
+        // ── Step 7: Actually click the buttons ──
         // This runs INSIDE the browser (like sending a little robot in)
         const result = await page.evaluate(
             clickInviteButtonsInPage,
@@ -331,7 +375,7 @@ async function runWithBrowser({
             delay,
         );
 
-        // ── Step 7: Read the result ──
+        // ── Step 8: Read the result ──
         count =
             result && typeof result === "object"
                 ? result.clickedCount || 0
@@ -343,13 +387,13 @@ async function runWithBrowser({
             `Matched ${matchedCount} candidate elements and clicked ${count} buttons`,
         );
 
-        // ── Step 8: Save to history ──
+        // ── Step 9: Save to history ──
         await storage.saveHistory(url, count);
     } catch (err) {
         logger.error("Error in inviter run: " + err.message);
         throw err;
     } finally {
-        // ── Step 9: Close the browser (always runs, even if something broke) ──
+        // ── Step 10: Close the browser (always runs, even if something broke) ──
         await browser.close();
     }
 
