@@ -91,13 +91,54 @@ const TIME_TEXT_REGEX = /\d+\s*(min|hr|hour|day|sec|h|m|s|d|week|month|year|rok|
 // ──────────────────────────────────────────────
 
 async function switchToMostRecent(page) {
-    logger.info("Attempting to switch to 'Most Recent' feed sorting...");
+    logger.info("Looking for post feed tab (trying Posts, All, Příspěvky)...");
 
+    // Try multiple tabs — managed pages show posts under "All", regular pages under "Posts"
+    const tabTexts = ["Posts", "Příspěvky", "All"];
+    let feedLoaded = false;
+
+    for (const tabText of tabTexts) {
+        const clicked = await clickTabByText(page, [tabText]);
+        if (clicked) {
+            logger.info(`Clicked '${tabText}' tab.`);
+            await new Promise((r) => setTimeout(r, 3000));
+            // Scroll a bit to trigger lazy-loaded feed content
+            await page.evaluate(() => window.scrollBy(0, 400));
+            await new Promise((r) => setTimeout(r, 1500));
+
+            // Quick check: any time-text links visible?
+            const hasPosts = await page.evaluate(() => {
+                const links = document.querySelectorAll("a[href]");
+                for (const l of links) {
+                    const t = (l.textContent || "").trim();
+                    if (/^\d+\s*(min|hr|hour|day|sec|h|m|s|d|week|month|rok|měsíc|den|hod|týden)/i.test(t)) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+
+            if (hasPosts) {
+                logger.info(`Feed found under '${tabText}' tab.`);
+                feedLoaded = true;
+                break;
+            } else {
+                logger.info(`No posts visible under '${tabText}' tab, trying next...`);
+            }
+        }
+    }
+
+    if (!feedLoaded) {
+        logger.info("No post feed tab found. Proceeding with current view.");
+    }
+
+    // Now try "Most Recent" filter if available
     const filterTexts = [
         "Most recent",
+        "Nejnovější",
         "Nejnovejsi",
         "Recent",
-        "Recent posts",
+        "Nedávné",
         "Nedavne",
     ];
 
@@ -138,6 +179,33 @@ async function switchToMostRecent(page) {
     }
 }
 
+/**
+ * Click a tab/button by its exact text content.
+ */
+async function clickTabByText(page, texts) {
+    try {
+        const result = await page.evaluate((targetTexts) => {
+            const all = document.querySelectorAll(
+                '[role="tab"], [role="button"], a, span, div',
+            );
+            for (const el of all) {
+                const elText = (el.textContent || "").trim();
+                for (const t of targetTexts) {
+                    if (elText === t && el.offsetParent !== null) {
+                        el.click();
+                        return t;
+                    }
+                }
+            }
+            return null;
+        }, texts);
+        return result;
+    } catch (err) {
+        logger.warn("Could not click tab: " + err.message);
+        return null;
+    }
+}
+
 // ──────────────────────────────────────────────
 // extractVisiblePosts
 // ──────────────────────────────────────────────
@@ -162,11 +230,21 @@ async function extractVisiblePosts(page, alreadySeen) {
                     const fullUrl = href.startsWith("/")
                         ? "https://www.facebook.com" + href
                         : href;
-                    // Clean up tracking params for dedup and final URL
-                let cleanUrl = fullUrl.split("?")[0];
-                // Also strip trailing slashes
-                cleanUrl = cleanUrl.replace(/\/+$/, "");
-                if (!candidates.has(cleanUrl)) candidates.set(cleanUrl, el);
+                    // Clean up tracking params for dedup
+                    let cleanUrl = fullUrl.split("?")[0];
+                    cleanUrl = cleanUrl.replace(/\/+$/, "");
+                    // Skip non-post URLs (nav, photos, followers)
+                    if (
+                        cleanUrl.includes("/followers/") ||
+                        cleanUrl.includes("/following/") ||
+                        cleanUrl.includes("set=a.") ||
+                        cleanUrl.includes("set=pb.") ||
+                        cleanUrl.endsWith("/reel") ||
+                        cleanUrl.endsWith("/reel/") ||
+                        cleanUrl.includes("/photo/?") ||
+                        cleanUrl.includes("/photos")
+                    ) continue;
+                    if (!candidates.has(cleanUrl)) candidates.set(cleanUrl, el);
                 }
             }
 
