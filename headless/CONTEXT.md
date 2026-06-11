@@ -1,12 +1,33 @@
 # Project Context: Inviter Headless
 
 > Generated: 2026-06-11
+> Updated: 2026-06-11 (after Phase 0–1 implementation)
 
 ---
 
 ## Overview
 
-**Inviter Headless** is a Puppeteer-based Node.js automation tool that scans Facebook posts/profiles and automatically sends invite requests (`Pozvat`/`Invite` buttons) to users who reacted to a post. It runs as a CLI tool, optionally inside Docker, and persists invite history to a JSON file.
+**Inviter Headless** is a Puppeteer-based Node.js automation tool that scans Facebook Page posts and automatically invites people who reacted (but don't yet follow) to follow the Page. It runs on a headless Ubuntu server via cron, respects strict rate limits, and operates in two phases: (1) scrape post list from page feed, (2) open reactions popup on each post and click Invite (`Pozvat`) buttons.
+
+**Planning documents:** `PLAN.md` (architecture & design), `RULES.md` (conventions, phased breakdown, testing strategy, two-phase execution model).
+
+---
+
+## Implementation Progress
+
+| Phase | Module | Status | Date |
+|-------|--------|--------|------|
+| 0 | `src/config.js` | ✅ Done | 2026-06-11 |
+| 1 | `src/rate-limiter.js` + `test/phase1-test.js` | ✅ Done | 2026-06-11 |
+| 2 | `src/auth.js` | ⬜ Pending | — |
+| 3 | `src/scraper.js` | ⬜ Pending | — |
+| 4 | `test/mock-reactions-dialog.html` | ⬜ Pending | — |
+| 5 | `src/reactions.js` | ⬜ Pending | — |
+| 6 | `src/inviter.js` (refactor) | ⬜ Pending | — |
+| 7 | `src/index.js` (CLI update) | ⬜ Pending | — |
+| 8 | `src/storage.js` (enhance) | ⬜ Pending | — |
+| 9 | `src/logger.js` (file transport) | ⬜ Pending | — |
+| 10 | Cron & deployment finalization | ⬜ Pending | — |
 
 ---
 
@@ -15,35 +36,113 @@
 ```
 D:\MASTER_FOLDER\PROJECTS\DIGITAL\CODE_PERSONAL\inviter\headless\
 ├── .dockerignore          # Excludes node_modules, profile, data from Docker build
-├── .env.example           # Env vars: DB_PATH, USER_AGENT, HEADLESS
+├── .env.example           # Env vars: FB_PAGE_URL, RATE_MODE, HEADLESS, paths
 ├── Dockerfile             # node:20-bullseye-slim with Chromium deps
 ├── docker-compose.yml     # Docker Compose service definition
 ├── package.json           # npm package (name: inviter-headless, v0.1.0)
 ├── package-lock.json
 ├── nodeinstal.bash        # Script to install Node dependencies
 ├── README.md              # Usage instructions
+├── PLAN.md                # Architecture & design document
+├── RULES.md               # Conventions, phased breakdown, testing strategy
+├── CONTEXT.md             # This file — project context for LLM
 ├── data/                  # Runtime data directory (gitignored)
-│   └── invitations.json   # Invite history database (JSON array)
+│   ├── invitations.json   # Invite history database (JSON array)
+│   ├── rate-limit-state.json  # NEW (Phase 1) — daily budget, cooldown state
+│   ├── posts.json         # NEW (Phase 3) — post list from Phase 1 scraping
+│   └── inviter.lock       # NEW (Phase 1) — atomic lock file
 ├── profile/               # Chrome browser profile for session reuse
 │   └── Default/           # Full Chrome user data directory
-│       ├── Cookies
-│       ├── Login Data
-│       ├── Preferences
-│       ├── Local Storage/
-│       └── ...browser cache/db files...
+├── test/                  # NEW — test files
+│   └── phase1-test.js     # Phase 1 unit tests (24 tests, no Puppeteer)
 └── src/
-    ├── index.js           # CLI entry point (yargs-based)
-    ├── inviter.js         # Core invite automation logic (Puppeteer)
-    ├── logger.js          # Winston logger (console transport)
+    ├── index.js           # CLI entry point (yargs-based, to be updated Phase 7)
+    ├── inviter.js         # Core automation logic (to be refactored, Phase 6)
+    ├── logger.js          # Winston logger (console transport, Phase 9)
     ├── session.js         # Chrome launch options & profile discovery
-    └── storage.js         # JSON-based invite history persistence
+    ├── storage.js         # JSON-based invite history persistence (Phase 8)
+    ├── config.js          # NEW (Phase 0) — central config + rate mode table
+    └── rate-limiter.js    # NEW (Phase 1) — daily budget, cooldowns, lock file
 ```
 
 ---
 
 ## Key Files & Their Roles
 
-### 1. `src/index.js` — CLI Entry Point
+### 1. `src/config.js` — Central Configuration (NEW, Phase 0)
+
+- **Single source of truth** for all configuration.
+- Contains the **rate mode table** (`paranoid`, `moderate`, `aggressive`) — all values (`maxPostsPerRun`, `dailyMax`, `perPostMax`, delays, cooldowns) come from here. No duplication.
+- Exports a **frozen config object** derived from `.env` with hardcoded defaults.
+- Precedence (once Phase 7 CLI is done): CLI flags > `.env` > defaults.
+- Detects invalid `RATE_MODE` values and throws a clear error.
+
+**Rate mode table:**
+
+| Setting | paranoid | moderate | aggressive |
+|---------|----------|----------|------------|
+| dailyMax | 100 | 250 | 500 |
+| perPostMax | 30 | 75 | 150 |
+| baseDelayMs | 5000 | 3000 | 1500 |
+| randomExtraMs | 5000 | 3000 | 1500 |
+| scrollDelayMs | 3000 | 2000 | 1000 |
+| postCooldownMs | 30000 | 15000 | 5000 |
+| errorCooldownHours | 48 | 24 | 12 |
+| maxPostsPerRun | 5 | 10 | 20 |
+| runTimeCapMs | 20 min | 30 min | 45 min |
+
+**Environment variables read:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FB_PAGE_URL` | `""` | Target Facebook Page URL |
+| `FB_PAGE_ID` | `""` | Page numeric ID or username |
+| `RATE_MODE` | `paranoid` | `paranoid` / `moderate` / `aggressive` |
+| `DATE_FROM` | `all` | Start date for post scraping (`YYYY-MM-DD`) |
+| `DATE_TO` | `all` | End date for post scraping (`YYYY-MM-DD`) |
+| `PROFILE_DIR` | `./profile` | Chrome user data directory |
+| `DATA_DIR` | `./data` | Runtime data directory |
+| `LOGS_DIR` | `./logs` | Log output directory |
+| `DB_PATH` | `./data/invitations.json` | Invite history path |
+| `POSTS_PATH` | `./data/posts.json` | Post list path (Phase 3) |
+| `RATE_LIMIT_PATH` | `./data/rate-limit-state.json` | Rate limit state path |
+| `HEADLESS` | `true` | Headless mode toggle |
+| `USER_AGENT` | Chrome 120 Linux | Custom user agent |
+| `PUPPETEER_EXECUTABLE_PATH` | auto-detected | Chromium binary path |
+| `PUPPETEER_PROTOCOL_TIMEOUT` | `300000` | Protocol timeout in ms |
+
+### 2. `src/rate-limiter.js` — Rate Limiting (NEW, Phase 1)
+
+- **Lock file** management: atomic `fs.writeFileSync(path, pid, { flag: 'wx' })` — no race condition.
+- **Daily budget**: `canInviteToday()` checks today's count vs `config.dailyMax`, `getRemainingBudget()` returns remaining invites.
+- **Cooldowns**: `enterCooldown(hours)` sets cooldown, `isInCooldown()` checks current status, auto-expires when time passes.
+- **Rate limit detection**: `scanTextForRateLimit(text)` is a pure function testing 12 patterns (English + Czech). `detectRateLimit(page)` scans a Puppeteer page's full text and triggers cooldown if any pattern matches.
+- **Recording**: `recordInvite(count)` increments daily counter after successful clicks. `resetErrorCounter()` clears error streak on clean runs.
+- **Daily reset**: `resetDailyIfNeeded()` automatically detects date changes and resets counters. Does NOT clear cooldowns (time-based).
+- **State file**: `data/rate-limit-state.json` — `{ date, invitesToday, dailyLimit, lastInviteTimestamp, isCooldown, cooldownUntil, consecutiveErrors }`.
+- **Config passthrough**: `getLimitPerPost()`, `getRunTimeCap()`, `getPostCooldown()` for convenience.
+- **24 unit tests** in `test/phase1-test.js` cover all functions without needing Puppeteer.
+
+**Rate limit text patterns (12 total):**
+
+| Lang | Pattern |
+|------|---------|
+| EN | `you are doing that too much` |
+| EN | `rate limit exceeded` |
+| EN | `blocked temporarily` |
+| EN | `this action is temporarily blocked` |
+| EN | `please try again later` |
+| EN | `you have been temporarily blocked` |
+| EN | `slow down` |
+| EN | `too many requests` |
+| CZ | `děláš to příliš často` |
+| CZ | `dočasně zablokováno` |
+| CZ | `tato akce je dočasně zablokována` |
+| CZ | `zkus to znovu později` |
+| CZ | `zpomal` |
+| CZ | `příliš mnoho požadavků` |
+
+### 3. `src/index.js` — CLI Entry Point
 
 - Uses **yargs** for argument parsing.
 - Options:
@@ -55,8 +154,9 @@ D:\MASTER_FOLDER\PROJECTS\DIGITAL\CODE_PERSONAL\inviter\headless\
   | `--profile-dir` | string | — | Chrome user data dir for login reuse |
   | `--headless` | boolean | true | Run browser in headless mode |
 - Flow: initializes storage → calls `inviter.runWithBrowser()` → logs result → exits.
+- **To be updated in Phase 7** with new flags: `--page`, `--dry-run`, `--date-from`, `--date-to`, `--rate-mode`.
 
-### 2. `src/inviter.js` — Core Automation Logic
+### 4. `src/inviter.js` — Core Automation Logic (to be refactored Phase 6)
 
 - Launches Puppeteer with config from `session.js`.
 - Navigates to the target Facebook post URL.
@@ -78,8 +178,9 @@ D:\MASTER_FOLDER\PROJECTS\DIGITAL\CODE_PERSONAL\inviter\headless\
     - Stops when `max` is reached.
 - Saves invite history to storage.
 - Supports both `Pozvat` (Czech/Slovak) and `Invite` (English) button labels.
+- **Current limitation**: No popup/dialog logic. Only works if invite buttons are already in the DOM. Phase 6 will refactor `inviter.js` into an orchestrator that wires together `auth.js`, `scraper.js`, `reactions.js`, and `rate-limiter.js`.
 
-### 3. `src/session.js` — Browser Launch Configuration
+### 5. `src/session.js` — Browser Launch Configuration
 
 - **`findCachedLinuxChrome()`**: Searches `~/.cache/puppeteer/chrome/linux-*` for a cached Chromium executable.
 - **`getLaunchOptions(profileDir, headless)`**: Returns Puppeteer launch options:
@@ -89,23 +190,24 @@ D:\MASTER_FOLDER\PROJECTS\DIGITAL\CODE_PERSONAL\inviter\headless\
     - `userDataDir`: Set if `profileDir` is provided.
     - `executablePath`: From env `PUPPETEER_EXECUTABLE_PATH`, or falls back to cached Linux Chrome.
 
-### 4. `src/storage.js` — Persistence Layer
+### 6. `src/storage.js` — Persistence Layer (to be enhanced Phase 8)
 
 - Stores invite history in `data/invitations.json` (or custom path via `DB_PATH` env var).
 - Structure: JSON array of `{ id, ts (Date.now()), url, count }`.
 - Two functions:
     - `init()`: Creates data directory and initializes empty JSON array file.
     - `saveHistory(url, count)`: Appends a new entry and writes back.
-- Note: Despite `.env.example` suggesting `invites.db`, the actual implementation uses `.json`.
+- **Phase 8 will add**: `loadPostList()`, `savePostList()`, `markPostProcessed()`, `isPostProcessed()` for the two-phase post list system. Will remove `peopleNames` from schema (privacy).
 
-### 5. `src/logger.js` — Logging
+### 7. `src/logger.js` — Logging (to be enhanced Phase 9)
 
 - Uses **winston** with a single `Console` transport at `info` level.
 - Format: simple (`winston.format.simple()`).
+- **Phase 9 will add**: file transport to `logs/run-YYYY-MM-DD.log` + 30-day log rotation.
 
 ---
 
-## Data Flow
+## Data Flow (Current)
 
 ```
 CLI (index.js)
@@ -137,17 +239,57 @@ CLI (index.js)
               └── Append to data/invitations.json
 ```
 
+## Data Flow (Target — after Phase 6)
+
+```
+CLI (index.js)
+  │
+  ├── config (rate mode, paths, date range)
+  │
+  ├── rateLimiter.acquireLock()
+  │
+  └── inviter.runWithBrowser(...)
+        │
+        ├── auth.ensureLoggedIn(page)
+        ├── auth.navigateToPage(page)
+        │
+        ├── [Phase 1] scraper.discoverPosts(page, dateFrom, dateTo)
+        │     └── Save to data/posts.json
+        │
+        ├── FOR EACH pending post:
+        │     ├── rateLimiter.canInviteToday()
+        │     ├── page.goto(post.url)
+        │     ├── rateLimiter.detectRateLimit(page)
+        │     ├── reactions.openReactionsDialog(page)
+        │     ├── reactions.findScrollableContainer(page)
+        │     ├── reactions.scrollAndInvite(container, limits, delay)
+        │     ├── storage.markPostProcessed(post.url, count)
+        │     └── rateLimiter.recordInvite(count)
+        │
+        └── rateLimiter.releaseLock()
+```
+
 ---
 
-## Environment Variables
+## Environment Variables (Updated after Phase 0)
 
-| Variable                     | Default                           | Description                           |
-| ---------------------------- | --------------------------------- | ------------------------------------- |
-| `DB_PATH`                    | `./data/invitations.json`         | Path to invite history JSON file      |
-| `USER_AGENT`                 | `Mozilla/5.0 (X11; Linux x86_64)` | Custom user agent for the page        |
-| `HEADLESS`                   | `true`                            | Headless mode toggle                  |
-| `PUPPETEER_EXECUTABLE_PATH`  | auto-detected                     | Path to custom Chromium/Chrome binary |
-| `PUPPETEER_PROTOCOL_TIMEOUT` | `300000`                          | Protocol timeout in ms                |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FB_PAGE_URL` | `""` | Target Facebook Page URL |
+| `FB_PAGE_ID` | `""` | Page numeric ID or username |
+| `RATE_MODE` | `paranoid` | `paranoid` / `moderate` / `aggressive` |
+| `DATE_FROM` | `all` | Start date for post scraping (`YYYY-MM-DD`) |
+| `DATE_TO` | `all` | End date for post scraping |
+| `PROFILE_DIR` | `./profile` | Chrome user data directory |
+| `DATA_DIR` | `./data` | Runtime data directory |
+| `LOGS_DIR` | `./logs` | Log output directory |
+| `DB_PATH` | `./data/invitations.json` | Invite history path |
+| `POSTS_PATH` | `./data/posts.json` | Post list path |
+| `RATE_LIMIT_PATH` | `./data/rate-limit-state.json` | Rate limit state path |
+| `HEADLESS` | `true` | Headless mode toggle |
+| `USER_AGENT` | Chrome 120 Linux | Custom user agent |
+| `PUPPETEER_EXECUTABLE_PATH` | auto-detected | Chromium binary path |
+| `PUPPETEER_PROTOCOL_TIMEOUT` | `300000` | Protocol timeout in ms |
 
 ---
 
@@ -213,10 +355,236 @@ Earlier versions (up to commit `f421dbf`) had a comprehensive multi-step popup-o
 
 #### Step 1: Open the Reactions Popup ("All reactions" opener)
 
-````js
+```js
 // Try clicking the 'All reactions' opener or toolbar that reveals people who reacted
 const openerClicked = await page.evaluate(() => {
     // Strategy 1: Exact 'All reactions' button with role=button
     const roleButtons = Array.from(document.querySelectorAll('[role="button"]'));
-    const exactAll = roleButtons.find(b => /^alln    const exactAll = roleButtons.find(b => /^all reactions[:\s]?/i.test(b.innerText));\n\n    // Strategy 2: Toolbar with aria-label matching localized variants\n    const toolbar = document.querySelector('[role=\"toolbar\"][aria-label]');\n    // Checks for: \"see who reacted\", \"reakce\" (Czech), \"reagoval\", \"people\", \"lidé\"\n\n    // Strategy 3: Any visible element with text \"All reactions\" or localized variants\n    const candidates = Array.from(document.querySelectorAll('[role=\"button\"], div, span'));\n    // Checks for: /all reactions/i, /see who reacted/i, /reakce/i, /people/i, /lidé/i\n\n    // Strategy 4: Elements with numeric count + \"others\" nearby\n    // Matches patterns like \"50 others\", \"30 people\"\n});\n```\n\nThe opener detection used **4 fallback strategies**, from most specific (exact `role=\"button\"` with text \"All reactions\") to most heuristic (any element with numbers + \"others\").\n\n#### Step 2: Debug Dump (if opener not found)\n\nIf no opener was found, the tool would:\n- Dump the full page HTML to `data/page-debug-{timestamp}.html`\n- Search for text matches and compute an XPath for the candidate opener element\n- Attempt to click via `page.$x()` (XPath-based Puppeteer click)\n- Dump all button candidates (text, aria-label, role, classes, outerHTML) to `data/button-candidates-{timestamp}.json`\n\n#### Step 3: Wait for the Dialog to Appear\n\n```js\nawait page.waitForTimeout(1200);\nawait Promise.race([\n    page.waitForSelector('[role=\"dialog\"]', { timeout: 3000 }).catch(() => {}),\n    page.waitForSelector('[role=\"list\"]', { timeout: 3000 }).catch(() => {}),\n]);\n```\n\nThis waited for a Facebook dialog (`[role=\"dialog\"]`) or list (`[role=\"list\"]`) to render after clicking the reactions opener.\n\n#### Step 4: Find the Scrollable Container Inside the Dialog\n\nThe `findScrollable()` function (commit `689bf34` / `dd10003`) searched for the correct scrollable container inside the popup:\n\n```js\nfunction findScrollable() {\n    // 1. Find all dialogs: document.querySelectorAll('[role=\"dialog\"]')\n    const dialogs = Array.from(document.querySelectorAll('[role=\"dialog\"]'));\n\n    for (const dialog of dialogs) {\n        // 2. Look for descendants containing Follow/Invite buttons\n        const candidates = Array.from(dialog.querySelectorAll('*'));\n        let best = null, bestCount = 0;\n\n        for (const candidate of candidates) {\n            // Count how many follow/invite buttons are inside this candidate\n            let count = 0;\n            for (const selector of selectors) {\n                count += candidate.querySelectorAll(selector).length;\n            }\n\n            if (count > 0) {\n                const overflowY = window.getComputedStyle(candidate).overflowY;\n                const scrollable = overflowY === 'auto' || overflowY === 'scroll'\n                    || candidate.scrollHeight > candidate.clientHeight;\n\n                // Prefer scrollable containers\n                if (scrollable) return candidate;\n                if (count > bestCount) { best = candidate; bestCount = count; }\n            }\n        }\n\n        // 3. Fallback to the dialog itself if scrollable\n        if (dialog.scrollHeight > dialog.clientHeight) return dialog;\n    }\n\n    // 4. Fallback: any large scrollable div on the page\n    // 5. Last resort: document.scrollingElement || document.body\n}\n```\n\nThis algorithm:\n1. Found all `[role=\"dialog\"]` elements (Facebook's popup overlay).\n2. Within each dialog, searched descendant elements for those containing follow/invite buttons.\n3. Among button-containing elements, **preferred scrollable ones** (`overflow: auto/scroll` or `scrollHeight > clientHeight`).\n4. Fell back to the dialog itself if scrollable.\n5. Fell back to any large page div with overflow.\n6. Last resort: the document's scrolling element or body.\n\n#### Step 5: Pre-scroll the Dialog to Load More Users\n\nBefore scanning for buttons, the tool pre-scrolled the container to trigger Facebook's lazy-loading:\n\n```js\n// Commit dd10003 version\nconst container = findScrollable();\nconst total = Math.max(container.scrollHeight || 1000, 1000);\nconst step = Math.floor(total / 6) || 400;\nfor (let i = 0; i < 10; i++) {\n    container.scrollBy({ top: step, behavior: \"smooth\" });\n    await new Promise(r => setTimeout(r, 450));\n}\n```\n\nThis performed 10 scroll steps with 450ms delays between them.\n\n#### Step 6: Iterative Scroll-and-Invite Loop\n\nCommit `39dce7f` (before simplification) had a full **while-loop** that scrolled, scanned, and invited iteratively:\n\n```js\nconst scrollable = findScrollable();\nlet consecutiveNoNewButtons = 0;\nlet lastScrollHeight = -1;\n\nwhile (clicked.length < maxInvites && consecutiveNoNewButtons <= noNewButtonsLimit) {\n    // 1. Scan for new buttons in the current viewport\n    const found = [];\n    for (const selector of selectors) {\n        const nodes = Array.from(document.querySelectorAll(selector));\n        for (const node of nodes) {\n            if (!isVisible(node) || !matchesTarget(node)) continue;\n            if (seenNodes.has(node)) continue;\n            seenNodes.add(node);\n            found.push(node);\n        }\n    }\n\n    // 2. Scroll to each found button and click\n    for (const node of found) {\n        node.scrollIntoView({ block: \"center\", inline: \"center\" });\n        await sleep(250);\n        if (simulateOnly) { /* record */ continue; }\n        node.click();\n        node.setAttribute(\"data-invited\", \"true\");\n        await sleep(delayMs + 500);\n    }\n\n    // 3. Scroll the container down to load more\n    if (scrollable) {\n        scrollable.scrollTop = scrollable.scrollHeight;\n    }\n    await sleep(1200);\n}\n```\n\nKey features of this loop:\n- **`seenNodes` (WeakSet)**: Tracks already-processed nodes across scroll cycles.\n- **`consecutiveNoNewButtons`**: Counter that breaks the loop after 5 consecutive scrolls with no new buttons found.\n- **`lastScrollHeight`**: Detects when the container stops growing (no more content to load).\n- **Scrolls to bottom** of the container to trigger Facebook's infinite scroll.\n\n#### Step 7: Scrolling Within the Dialog (Commit `dd10003`)\n\nCommit `dd10003` replaced the while-loop with a **for-loop with fixed scroll rounds**:\n\n```js\nconst root = findScrollable();\nlet lastScrollTop = -1;\n\nfor (let round = 0; round < scrollRounds; round++) {\n    // Scan for all buttons visible in current viewport\n    const nodes = [];\n    for (const selector of selectors) {\n        const scope = root || document;\n        const matches = Array.from(scope.querySelectorAll(selector));\n        for (const node of matches) {\n            if (!isVisible(node) || !matchesTarget(node)) continue;\n            nodes.push(node);\n        }\n    }\n\n    // Click all found buttons\n    const uniqueNodes = Array.from(new Set(nodes));\n    for (const node of uniqueNodes) { /* click logic */ }\n\n    // Scroll incrementally within the popup\n    if (root && root.scrollHeight > root.clientHeight) {\n        const currentTop = root.scrollTop || 0;\n        const nextTop = currentTop + Math.max(200, Math.floor(root.clientHeight * 0.8));\n        root.scrollTop = nextTop;\n        if (root.scrollTop === lastScrollTop) break; // Stop if scrolled to bottom\n        lastScrollTop = root.scrollTop;\n    } else {\n        window.scrollBy(0, Math.max(200, window.innerHeight * 0.8));\n    }\n}\n```\n\nThis version:\n- Scrolled in increments of **80% of the container height** (or 200px minimum).\n- Detected scroll end by comparing `scrollTop` before and after (if no change → reached bottom).\n- Used `scrollRounds = 2` for dry-run, `5` for actual invites.\n\n---\n\n### Evolution Timeline (Scrolling & Popup)\n\n| Commit | State | Key Changes |\n|---|---|---|\n| `81d6128` | **Initial** | Headless Puppeteer scaffold, basic navigation |\n| `689bf34` | **Full implementation** | Reactions opener click → dialog detection → `findScrollable()` → iterative scroll-and-invite while-loop → `seenNodes` tracking → `consecutiveNoNewButtons` break condition |\n| `3f8839e` | **Dry-run added** | `simulateOnly` flag to log matches without clicking |\n| `39dce7f` | **Simplified** | **Removed** the entire scroll loop, `WeakSet`, `consecutiveNoNewButtons`, `findScrollable()`. Replaced with flat scan of all DOM nodes at once using `findScrollable()` scope. |\n| `dd10003` | **Scroll rounds added** | Reintroduced scrolling as a **for-loop** (`scrollRounds`) with incremental scroll (80% height steps). Added scroll-end detection. |\n| `f421dbf` | **CSS fix** | Added light color-scheme injection to fix black background. |\n| `c54f7d0` | **Streamlined (CURRENT)** | **Removed ALL** popup/dialog logic, `findScrollable()`, opener detection, scroll loops. Only does flat button scan + click. No reactions popup handling. |\n\n---\n\n### Why the Popup/Scroll Logic Was Removed\n\nThe current streamlined version:\n- Only works if **invite buttons are already visible on the page** (e.g., a group member list or event attendees page where buttons render natively).\n- Does **not** open the reactions popup, so if the URL is a post, the tool will likely find **zero** buttons.\n- Has no scrolling loop, so only buttons in the initial viewport are clicked.\n\nIf you need the full reactions-popup + scrolling functionality again, the code exists in commits `689bf34` through `f421dbf` and can be restored from git history.\n\n---\n\n## Key Observations\n\n1. **Facebook selectors target `Pozvat` (Czech/Slovak) and `Invite` (English)** — the tool is designed for multilingual use.\n2. **All interaction runs inside `page.evaluate()`** — clicks happen in the browser context, not via Puppeteer's `page.click()`. This means no navigation handling between clicks.\n3. **No pagination/scroll loop in current version** — the current code only clicks buttons visible at page load. Earlier commits (up to `f421dbf`) had full scroll-and-invite loops within dialog popups that were removed.\n4. **Storage uses JSON** (despite the name suggesting `invites.db` in `.env.example`).\n5. **Profile directory** contains a real Chrome profile with cookies, localStorage, and session data — enabling login reuse without re-authentication.\n6. **The `package.json` main field points to `src/login.js`** which doesn't exist — this is a legacy reference; actual entry point is `src/index.js`."}]
-````
+    const exactAll = roleButtons.find(b => /^all reactions[:\s]?/i.test(b.innerText));
+
+    // Strategy 2: Toolbar with aria-label matching localized variants
+    const toolbar = document.querySelector('[role="toolbar"][aria-label]');
+    // Checks for: "see who reacted", "reakce" (Czech), "reagoval", "people", "lidé"
+
+    // Strategy 3: Any visible element with text "All reactions" or localized variants
+    const candidates = Array.from(document.querySelectorAll('[role="button"], div, span'));
+    // Checks for: /all reactions/i, /see who reacted/i, /reakce/i, /people/i, /lidé/i
+
+    // Strategy 4: Elements with numeric count + "others" nearby
+    // Matches patterns like "50 others", "30 people"
+});
+```
+
+The opener detection used **4 fallback strategies**, from most specific (exact `role="button"` with text "All reactions") to most heuristic (any element with numbers + "others").
+
+#### Step 2: Debug Dump (if opener not found)
+
+If no opener was found, the tool would:
+- Dump the full page HTML to `data/page-debug-{timestamp}.html`
+- Search for text matches and compute an XPath for the candidate opener element
+- Attempt to click via `page.$x()` (XPath-based Puppeteer click)
+- Dump all button candidates (text, aria-label, role, classes, outerHTML) to `data/button-candidates-{timestamp}.json`
+
+#### Step 3: Wait for the Dialog to Appear
+
+```js
+await page.waitForTimeout(1200);
+await Promise.race([
+    page.waitForSelector('[role="dialog"]', { timeout: 3000 }).catch(() => {}),
+    page.waitForSelector('[role="list"]', { timeout: 3000 }).catch(() => {}),
+]);
+```
+
+This waited for a Facebook dialog (`[role="dialog"]`) or list (`[role="list"]`) to render after clicking the reactions opener.
+
+#### Step 4: Find the Scrollable Container Inside the Dialog
+
+The `findScrollable()` function (commit `689bf34` / `dd10003`) searched for the correct scrollable container inside the popup:
+
+```js
+function findScrollable() {
+    // 1. Find all dialogs: document.querySelectorAll('[role="dialog"]')
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+
+    for (const dialog of dialogs) {
+        // 2. Look for descendants containing Follow/Invite buttons
+        const candidates = Array.from(dialog.querySelectorAll('*'));
+        let best = null, bestCount = 0;
+
+        for (const candidate of candidates) {
+            // Count how many follow/invite buttons are inside this candidate
+            let count = 0;
+            for (const selector of selectors) {
+                count += candidate.querySelectorAll(selector).length;
+            }
+
+            if (count > 0) {
+                const overflowY = window.getComputedStyle(candidate).overflowY;
+                const scrollable = overflowY === 'auto' || overflowY === 'scroll'
+                    || candidate.scrollHeight > candidate.clientHeight;
+
+                // Prefer scrollable containers
+                if (scrollable) return candidate;
+                if (count > bestCount) { best = candidate; bestCount = count; }
+            }
+        }
+
+        // 3. Fallback to the dialog itself if scrollable
+        if (dialog.scrollHeight > dialog.clientHeight) return dialog;
+    }
+
+    // 4. Fallback: any large scrollable div on the page
+    // 5. Last resort: document.scrollingElement || document.body
+}
+```
+
+This algorithm:
+1. Found all `[role="dialog"]` elements (Facebook's popup overlay).
+2. Within each dialog, searched descendant elements for those containing follow/invite buttons.
+3. Among button-containing elements, **preferred scrollable ones** (`overflow: auto/scroll` or `scrollHeight > clientHeight`).
+4. Fell back to the dialog itself if scrollable.
+5. Fell back to any large page div with overflow.
+6. Last resort: the document's scrolling element or body.
+
+#### Step 5: Pre-scroll the Dialog to Load More Users
+
+Before scanning for buttons, the tool pre-scrolled the container to trigger Facebook's lazy-loading:
+
+```js
+// Commit dd10003 version
+const container = findScrollable();
+const total = Math.max(container.scrollHeight || 1000, 1000);
+const step = Math.floor(total / 6) || 400;
+for (let i = 0; i < 10; i++) {
+    container.scrollBy({ top: step, behavior: "smooth" });
+    await new Promise(r => setTimeout(r, 450));
+}
+```
+
+This performed 10 scroll steps with 450ms delays between them.
+
+#### Step 6: Iterative Scroll-and-Invite Loop
+
+Commit `39dce7f` (before simplification) had a full **while-loop** that scrolled, scanned, and invited iteratively:
+
+```js
+const scrollable = findScrollable();
+let consecutiveNoNewButtons = 0;
+let lastScrollHeight = -1;
+
+while (clicked.length < maxInvites && consecutiveNoNewButtons <= noNewButtonsLimit) {
+    // 1. Scan for new buttons in the current viewport
+    const found = [];
+    for (const selector of selectors) {
+        const nodes = Array.from(document.querySelectorAll(selector));
+        for (const node of nodes) {
+            if (!isVisible(node) || !matchesTarget(node)) continue;
+            if (seenNodes.has(node)) continue;
+            seenNodes.add(node);
+            found.push(node);
+        }
+    }
+
+    // 2. Scroll to each found button and click
+    for (const node of found) {
+        node.scrollIntoView({ block: "center", inline: "center" });
+        await sleep(250);
+        if (simulateOnly) { /* record */ continue; }
+        node.click();
+        node.setAttribute("data-invited", "true");
+        await sleep(delayMs + 500);
+    }
+
+    // 3. Scroll the container down to load more
+    if (scrollable) {
+        scrollable.scrollTop = scrollable.scrollHeight;
+    }
+    await sleep(1200);
+}
+```
+
+Key features of this loop:
+- **`seenNodes` (WeakSet)**: Tracks already-processed nodes across scroll cycles.
+- **`consecutiveNoNewButtons`**: Counter that breaks the loop after 5 consecutive scrolls with no new buttons found.
+- **`lastScrollHeight`**: Detects when the container stops growing (no more content to load).
+- **Scrolls to bottom** of the container to trigger Facebook's infinite scroll.
+
+#### Step 7: Scrolling Within the Dialog (Commit `dd10003`)
+
+Commit `dd10003` replaced the while-loop with a **for-loop with fixed scroll rounds**:
+
+```js
+const root = findScrollable();
+let lastScrollTop = -1;
+
+for (let round = 0; round < scrollRounds; round++) {
+    // Scan for all buttons visible in current viewport
+    const nodes = [];
+    for (const selector of selectors) {
+        const scope = root || document;
+        const matches = Array.from(scope.querySelectorAll(selector));
+        for (const node of matches) {
+            if (!isVisible(node) || !matchesTarget(node)) continue;
+            nodes.push(node);
+        }
+    }
+
+    // Click all found buttons
+    const uniqueNodes = Array.from(new Set(nodes));
+    for (const node of uniqueNodes) { /* click logic */ }
+
+    // Scroll incrementally within the popup
+    if (root && root.scrollHeight > root.clientHeight) {
+        const currentTop = root.scrollTop || 0;
+        const nextTop = currentTop + Math.max(200, Math.floor(root.clientHeight * 0.8));
+        root.scrollTop = nextTop;
+        if (root.scrollTop === lastScrollTop) break; // Stop if scrolled to bottom
+        lastScrollTop = root.scrollTop;
+    } else {
+        window.scrollBy(0, Math.max(200, window.innerHeight * 0.8));
+    }
+}
+```
+
+This version:
+- Scrolled in increments of **80% of the container height** (or 200px minimum).
+- Detected scroll end by comparing `scrollTop` before and after (if no change → reached bottom).
+- Used `scrollRounds = 2` for dry-run, `5` for actual invites.
+
+---
+
+### Evolution Timeline (Scrolling & Popup)
+
+| Commit | State | Key Changes |
+|---|---|---|
+| `81d6128` | **Initial** | Headless Puppeteer scaffold, basic navigation |
+| `689bf34` | **Full implementation** | Reactions opener click → dialog detection → `findScrollable()` → iterative scroll-and-invite while-loop → `seenNodes` tracking → `consecutiveNoNewButtons` break condition |
+| `3f8839e` | **Dry-run added** | `simulateOnly` flag to log matches without clicking |
+| `39dce7f` | **Simplified** | **Removed** the entire scroll loop, `WeakSet`, `consecutiveNoNewButtons`, `findScrollable()`. Replaced with flat scan of all DOM nodes at once using `findScrollable()` scope. |
+| `dd10003` | **Scroll rounds added** | Reintroduced scrolling as a **for-loop** (`scrollRounds`) with incremental scroll (80% height steps). Added scroll-end detection. |
+| `f421dbf` | **CSS fix** | Added light color-scheme injection to fix black background. |
+| `c54f7d0` | **Streamlined (CURRENT)** | **Removed ALL** popup/dialog logic, `findScrollable()`, opener detection, scroll loops. Only does flat button scan + click. No reactions popup handling. |
+
+---
+
+### Why the Popup/Scroll Logic Was Removed
+
+The current streamlined version:
+- Only works if **invite buttons are already visible on the page** (e.g., a group member list or event attendees page where buttons render natively).
+- Does **not** open the reactions popup, so if the URL is a post, the tool will likely find **zero** buttons.
+- Has no scrolling loop, so only buttons in the initial viewport are clicked.
+
+If you need the full reactions-popup + scrolling functionality again, the code exists in commits `689bf34` through `f421dbf` and can be restored from git history.
+
+---
+
+## Key Observations
+
+1. **Facebook selectors target `Pozvat` (Czech/Slovak) and `Invite` (English)** — the tool is designed for multilingual use.
+2. **All interaction runs inside `page.evaluate()`** — clicks happen in the browser context, not via Puppeteer's `page.click()`. This means no navigation handling between clicks.
+3. **No pagination/scroll loop in current version** — the current code only clicks buttons visible at page load. Earlier commits (up to `f421dbf`) had full scroll-and-invite loops within dialog popups that were removed.
+4. **Storage uses JSON** (despite the name suggesting `invites.db` in `.env.example`).
+5. **Profile directory** contains a real Chrome profile with cookies, localStorage, and session data — enabling login reuse without re-authentication.
+6. **The `package.json` main field points to `src/login.js`** which doesn't exist — this is a legacy reference; actual entry point is `src/index.js`.
+7. **New architecture uses two-phase execution** (Phase 1: scrape post list → Phase 2: invite from list) for crash-resilience and resumability.
+8. **Rate mode is the single source of truth** for all timing/budget values — no duplication between config files.
