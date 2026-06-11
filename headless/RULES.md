@@ -11,6 +11,7 @@
 1. **One module, one concern.** Each `src/*.js` file does exactly one thing.
 2. **Fail safe.** Never attempt programmatic re-login. Never retry on rate-limit errors. If something unexpected happens, stop and log clearly.
 3. **Small chunks.** Each implementation step targets ONE module or ONE feature. No mega-PRs. The LLM gets one task at a time.
+4. **Every step must be tested.** After each phase, there must be a concrete way to verify correctness — whether it's a unit test, a manual command, or a dry-run. No phase is "done" until the success criteria are met. If a phase has no way to test it, it's not ready to implement.
 4. **Test with mocks.** No test page available → we build a local mock HTML page that mirrors Facebook's reactions dialog structure. All popup/scroll/invite logic is validated against the mock before touching real Facebook.
 5. **Two-phase execution.** Scraping the post list and inviting from posts are separate phases. This means resumption is trivial — if a run crashes, it picks up from the list.
 
