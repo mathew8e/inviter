@@ -13,6 +13,7 @@
 3. **Small chunks.** Each implementation step targets ONE module or ONE feature. No mega-PRs. The LLM gets one task at a time.
 4. **Every step must be tested.** After each phase, there must be a concrete way to verify correctness — whether it's a unit test, a manual command, or a dry-run. No phase is "done" until the success criteria are met. If a phase has no way to test it, it's not ready to implement.
 5. **NO destructive actions without explicit permission.** Any code that clicks Facebook buttons, sends invites, modifies Facebook data, follows/unfollows, or performs ANY state-changing action must be gated behind an explicit user confirmation. This applies to live runs against real Facebook. Read-only operations (scraping, reading page content, extracting URLs, dry-run logging) are fine without confirmation. The `--dry-run` flag is the default safe mode — actual clicks require removing `--dry-run` explicitly.
+6. **If you're stuck or retrying the same fix 3+ times, stop and ask the user.** Do not loop on the same problem — present what's working, what's not, and ask for guidance.
 4. **Test with mocks.** No test page available → we build a local mock HTML page that mirrors Facebook's reactions dialog structure. All popup/scroll/invite logic is validated against the mock before touching real Facebook.
 5. **Two-phase execution.** Scraping the post list and inviting from posts are separate phases. This means resumption is trivial — if a run crashes, it picks up from the list.
 

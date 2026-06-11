@@ -225,7 +225,7 @@ const INVITE_SELECTORS = [
 
 ## 5. Module-by-Module Plan
 
-### 5.1 `src/config.js` (NEW)
+### 5.1 `src/config.js` (NEW) ✅ DONE
 
 Central configuration with **3 rate limit modes** (see Section 6):
 
@@ -253,7 +253,7 @@ module.exports = {
 };
 ```
 
-### 5.2 `src/auth.js` (NEW)
+### 5.2 `src/auth.js` (NEW) ✅ DONE
 
 ```
 ensureLoggedIn(browser, profileDir)  → page
@@ -269,7 +269,7 @@ navigateToPage(page, pageUrl)  → boolean
   - Return true/false
 ```
 
-### 5.3 `src/scraper.js` (NEW)
+### 5.3 `src/scraper.js` (NEW) ✅ DONE
 
 ```
 discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts)  → Post[]
@@ -313,7 +313,7 @@ scrollAndInvite(page, container, maxInvites, baseDelay)  → number
   - Return count of invites sent
 ```
 
-### 5.5 `src/rate-limiter.js` (NEW)
+### 5.5 `src/rate-limiter.js` (NEW) ✅ DONE
 
 ```
 canInviteToday()  → { allowed, remaining, reason }

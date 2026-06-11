@@ -358,15 +358,17 @@ async function extractVisiblePosts(page, alreadySeen) {
 }
 
 // ──────────────────────────────────────────────
-// scrollPageDown
+// scrollToBottom — scroll to absolute bottom, detect if more content loaded
 // ──────────────────────────────────────────────
 
-async function scrollPageDown(page) {
-    const before = await page.evaluate(() => window.scrollY);
-    await page.evaluate(() => { window.scrollBy(0, window.innerHeight); });
-    await new Promise((r) => setTimeout(r, 500));
-    const after = await page.evaluate(() => window.scrollY);
-    return before !== after;
+async function scrollToBottom(page) {
+    const before = await page.evaluate(() => document.body.scrollHeight);
+    await page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
+    });
+    await new Promise((r) => setTimeout(r, 800));
+    const after = await page.evaluate(() => document.body.scrollHeight);
+    return after > before; // true if new content was loaded (scrollHeight grew)
 }
 
 // ──────────────────────────────────────────────
@@ -422,12 +424,18 @@ async function discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts) {
 
     const posts = [];
     let noNewPostsStreak = 0;
-    const scrollDelay = 1500;
 
-    while (posts.length < maxPosts && noNewPostsStreak < 3) {
+    let scrollHeightUnchangedStreak = 0;
+
+    while (posts.length < maxPosts && scrollHeightUnchangedStreak < 8) {
         const found = await extractVisiblePosts(page, alreadySeen);
 
         for (const post of found) {
+            // Filter out the page URL itself (not a post)
+            const pageUrlClean = pageUrl.toLowerCase().replace(/\/+$/, "");
+            const postUrlClean = post.url.toLowerCase().replace(/\/+$/, "");
+            if (postUrlClean === pageUrlClean) continue;
+
             alreadySeen.add(post.url);
             posts.push(post);
             logger.info(`Post #${posts.length}: ${post.date} — ${post.url.slice(0, 80)}`);
@@ -436,18 +444,30 @@ async function discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts) {
 
         if (found.length === 0) {
             noNewPostsStreak++;
-            logger.info(`No new posts this scroll (streak ${noNewPostsStreak}/3)`);
+            logger.info(`No new posts this scroll (streak ${noNewPostsStreak})`);
         } else {
             noNewPostsStreak = 0;
         }
 
-        const scrolled = await scrollPageDown(page);
-        if (!scrolled) {
-            logger.info("Scroll height unchanged — end of feed?");
-            break;
+        // Scroll to absolute bottom to trigger Facebook's lazy loader
+        const grew = await scrollToBottom(page);
+        await new Promise((r) => setTimeout(r, 2500)); // Wait for new content to render
+
+        if (!grew) {
+            scrollHeightUnchangedStreak++;
+            if (scrollHeightUnchangedStreak >= 4) {
+                logger.info("scrollHeight unchanged 4 times — end of feed.");
+                break;
+            }
+        } else {
+            scrollHeightUnchangedStreak = 0;
         }
 
-        await new Promise((r) => setTimeout(r, scrollDelay));
+        // Safety: no posts + no height growth = truly done
+        if (noNewPostsStreak >= 6 && scrollHeightUnchangedStreak >= 3) {
+            logger.info("No posts + no scroll growth — end of feed.");
+            break;
+        }
     }
 
     logger.info(`Discovered ${posts.length} posts total.`);
@@ -476,7 +496,7 @@ module.exports = {
     savePostList,
     switchToMostRecent,
     extractVisiblePosts,
-    scrollPageDown,
+    scrollToBottom,
     filterByDate,
     mergePostLists,
     extractDateString,
