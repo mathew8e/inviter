@@ -1,6 +1,6 @@
 # PLAN.md — Inviter Headless
 
-> **Last updated:** 2026-06-11 (Phase 0–3 complete, Phase 4 next)
+> **Last updated:** 2026-06-12 (Phase 0–4 complete, Phase 5 next)
 > **Target environment:** HP Ubuntu Server (Ubuntu 20.x, 4–8 GB RAM, home network attic)
 > **Purpose:** Automatically invite everyone who reacts to a politician's Facebook posts to follow the page
 > **Auth method:** Facebook Business Suite (delegated page access)
@@ -60,13 +60,14 @@ The `headless/` folder already has:
 | `src/scraper.js` | ✅ NEW (Phase 3) — post discovery, date parsing, dedup |
 | `test/phase1-test.js` | ✅ Phase 1 tests (24 passing) |
 | `test/phase3-test.js` | ✅ Phase 3 integration test (auth + scraper) |
+| `test/phase4-test.js` | ✅ Phase 4 unit tests + live dry-run (11 passing) |
 | `Dockerfile` | Node 20 + Chromium deps |
 | `docker-compose.yml` | Volume mounts for data/profile |
 | `RULES.md` | ✅ Project conventions, step-by-step breakdown |
 
-**What's done:** Configuration, rate limiting, authentication, post discovery/scraping. Tested headless against real Facebook page (PiratDanielKus). 20 posts scraped with correct URLs and dates.
+**What's done:** Configuration, rate limiting, authentication, post discovery/scraping, reactions dialog (open, scroll, invite loop). Tested with 11 unit tests against mock HTML + live dry-run capability.
 
-**What's next (Phase 4):** Mock reactions dialog HTML for safe testing before building the real invite-clicking logic.
+**What's next (Phase 5):** Wire reactions module into inviter.js — orchestrate the full workflow from post discovery through invite clicking with rate-limit coordination.
 
 ---
 
@@ -116,7 +117,7 @@ headless/
 │   ├── config.js             # NEW — central config + 3 rate limit modes
 │   ├── auth.js               # NEW — login verify + page navigation
 │   ├── scraper.js            # NEW — discover posts from page feed
-│   ├── reactions.js          # NEW — open popup, scroll loop, click invites
+│   ├── reactions.js          # ✅ (Phase 4) — open popup, scroll loop, click invites
 │   └── rate-limiter.js       # NEW — daily budget, cooldowns, error detection
 ├── logs/                     # Log output files
 ├── .env                      # Config variables
@@ -295,7 +296,7 @@ Posts are discovered from the page timeline. Each post has a URL like `https://w
 
 Date filtering: compare post timestamp against `dateFrom`/`dateTo`. If `dateFrom === 'all'`, process everything available (up to maxPosts). For the **first run**, the user would set `dateFrom` far back (e.g., 3 years). For periodic runs, `dateFrom` would be the last run date.
 
-### 5.4 `src/reactions.js` (NEW)
+### 5.4 `src/reactions.js` ✅ DONE (Phase 4)
 
 **The most complex module.** Opens reactions popup and implements the scroll-and-invite loop.
 
