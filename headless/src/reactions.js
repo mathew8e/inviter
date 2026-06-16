@@ -127,12 +127,15 @@ function getLargeMockDialogHtml() {
 // ──────────────────────────────────────────────
 
 /**
- * Opens the reactions popup on a post page by clicking the reactions count.
+ * Opens the reactions popup on a post page by clicking the reactions bar.
  *
- * Strategy:
- *   1. Try aria-label containing "reakc" or "reaction" (Czech/English)
- *   2. Try any clickable element with text matching numeric reactions count
- *   3. Try clicking an element containing reaction emoji-like spans
+ * The reactions bar is a `span[role="toolbar"]` containing:
+ *   - Individual reaction-type buttons: `div[role="button"][aria-label="Like: 3.2K people"]`
+ *     (clicking one of these opens a FILTERED dialog for that reaction type only)
+ *   - The "All reactions" button: `div[role="button"]` with NO aria-label, containing
+ *     text like "All reactions:" and the total count — this opens the full unfiltered dialog.
+ *
+ * We always target the "All reactions" button so we see every person who reacted.
  *
  * @param {import('puppeteer').Page} page
  * @returns {Promise<boolean>} true if dialog opened, false otherwise
@@ -140,80 +143,85 @@ function getLargeMockDialogHtml() {
 async function openReactionsDialog(page) {
     logger.info("Attempting to open reactions dialog...");
 
-    // Wait a moment for the post page to fully render
+    // Wait for the post page to fully render
     await new Promise((r) => setTimeout(r, 2000));
 
-    // Try multiple strategies to find and click the reactions count
     const strategies = [
-        // Strategy 1: aria-label with "reakc" or "reaction"
+        // Strategy 1 (primary): Find span[role="toolbar"] — the reactions bar.
+        // Inside it, click the div[role="button"] that has NO aria-label.
+        // That's the "All reactions" button (individual reaction icons DO have aria-labels).
+        // Falls back to any button inside the toolbar if "All reactions" isn't found.
         async () => {
-            const clicked = await page.evaluate(() => {
-                const all = document.querySelectorAll('[aria-label*="reakc" i], [aria-label*="reaction" i]');
-                for (const el of all) {
-                    if (el.offsetParent !== null) {
-                        el.click();
-                        return el.getAttribute("aria-label");
-                    }
-                }
-                return null;
-            });
-            return clicked;
-        },
+            return await page.evaluate(() => {
+                const toolbars = document.querySelectorAll('span[role="toolbar"]');
+                for (const toolbar of toolbars) {
+                    const buttons = toolbar.querySelectorAll('div[role="button"]');
 
-        // Strategy 2: Look for the reactions count bar (common FB pattern)
-        async () => {
-            const clicked = await page.evaluate(() => {
-                // Facebook often has a container with reaction counts
-                // Look for spans containing emoji-like characters and numbers
-                const containers = document.querySelectorAll('[role="button"]');
-                for (const el of containers) {
-                    const text = el.textContent || "";
-                    // Match patterns like "47", "1.2K", "You and 47 others"
-                    if (/\d+/.test(text) && el.offsetParent !== null) {
-                        const aria = (el.getAttribute("aria-label") || "").toLowerCase();
-                        if (aria.includes("reac") || aria.includes("like") || aria.includes("to se")) {
-                            el.click();
-                            return aria;
+                    // Prefer the unlabelled button = "All reactions"
+                    for (const btn of buttons) {
+                        if (!btn.getAttribute("aria-label") && btn.offsetParent !== null) {
+                            btn.click();
+                            return `toolbar → "All reactions" (no aria-label)`;
+                        }
+                    }
+
+                    // Fallback: click any visible button inside the toolbar
+                    for (const btn of buttons) {
+                        if (btn.offsetParent !== null) {
+                            btn.click();
+                            return `toolbar → ${btn.getAttribute("aria-label") || "unlabeled"}`;
                         }
                     }
                 }
                 return null;
             });
-            return clicked;
         },
 
-        // Strategy 3: Click any visible element that looks like a reactions summary
+        // Strategy 2: Individual reaction buttons have aria-label in the pattern
+        // "Like: 3.2K people" or "Angry: 2.6K people" — colon followed by a count.
+        // Clicking one opens a filtered dialog; still better than nothing.
         async () => {
-            const clicked = await page.evaluate(() => {
-                const spans = document.querySelectorAll('span[class*="reaction"], span[class*="like"]');
-                for (const span of spans) {
-                    let parent = span;
-                    for (let i = 0; i < 5; i++) {
-                        parent = parent.parentElement;
-                        if (!parent) break;
-                        const role = parent.getAttribute("role");
-                        if (role === "button" && parent.offsetParent !== null) {
-                            parent.click();
-                            return "clicked via reactions span parent";
-                        }
+            return await page.evaluate(() => {
+                const buttons = document.querySelectorAll('div[role="button"][aria-label]');
+                for (const btn of buttons) {
+                    const label = btn.getAttribute("aria-label") || "";
+                    // Match "Reaction type: NNN people/lidí/osob"
+                    if (/:\s*[\d.,]+[KMB]?\s/i.test(label) && btn.offsetParent !== null) {
+                        btn.click();
+                        return label;
                     }
                 }
                 return null;
             });
-            return clicked;
+        },
+
+        // Strategy 3: Text-content fallback — find a visible div[role="button"] whose
+        // inner text contains "all reactions", "všechny reakce", or similar phrases.
+        async () => {
+            return await page.evaluate(() => {
+                const keywords = ["all reactions", "všechny reakce", "see who reacted", "zobrazit"];
+                const buttons = document.querySelectorAll('div[role="button"]');
+                for (const btn of buttons) {
+                    const text = (btn.textContent || "").toLowerCase();
+                    if (keywords.some((kw) => text.includes(kw)) && btn.offsetParent !== null) {
+                        btn.click();
+                        return btn.textContent.trim().slice(0, 60);
+                    }
+                }
+                return null;
+            });
         },
     ];
 
-    for (const strategy of strategies) {
+    for (let i = 0; i < strategies.length; i++) {
         try {
-            const result = await strategy();
+            const result = await strategies[i]();
             if (result) {
-                logger.info(`Reactions count clicked: "${result}"`);
+                logger.info(`Strategy ${i + 1} clicked: "${result}"`);
 
-                // Wait for dialog to appear
+                // Wait for the dialog to render
                 await new Promise((r) => setTimeout(r, 3000));
 
-                // Verify dialog appeared
                 const dialogVisible = await page.evaluate(() => {
                     const dialog = document.querySelector('[role="dialog"]');
                     return dialog !== null && dialog.offsetParent !== null;
@@ -222,12 +230,11 @@ async function openReactionsDialog(page) {
                 if (dialogVisible) {
                     logger.info("Reactions dialog opened successfully.");
                     return true;
-                } else {
-                    logger.info("Clicked reactions count but no [role='dialog'] appeared. Trying next strategy...");
                 }
+                logger.info(`Strategy ${i + 1}: clicked but no [role="dialog"] appeared. Trying next...`);
             }
         } catch (err) {
-            logger.warn(`Strategy failed: ${err.message}`);
+            logger.warn(`Strategy ${i + 1} failed: ${err.message}`);
         }
     }
 
@@ -389,33 +396,63 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
             `(${buttonsFound.totalVisible} total invite-like elements)`,
         );
 
-        // ── Step 2: Click each uninvited button ──
+        // ── Step 2: Click each uninvited button one at a time with visual preview ──
         if (buttonsFound.uninvitedCount > 0) {
             scrollsWithoutNew = 0;
+            let clickedThisRound = 0;
+            const maxToClick = Math.min(buttonsFound.uninvitedCount, maxInvites - invitesSent);
 
-            const clickedThisRound = await page.evaluate(
-                (selStr, maxRemaining, shouldDryRun) => {
+            for (let i = 0; i < maxToClick; i++) {
+                // Highlight the next uninvited button with orange outline
+                const found = await page.evaluate((selStr) => {
                     const all = document.querySelectorAll(selStr);
-                    let clicked = 0;
-
                     for (const el of all) {
-                        if (clicked >= maxRemaining) break;
                         if (el.getAttribute("data-invited") === "true") continue;
+                        if (el.getAttribute("data-pending") === "true") continue;
                         if (el.offsetParent === null) continue;
 
+                        el.setAttribute("data-pending", "true");
+                        el.style.outline = "4px solid orange";
+                        el.style.backgroundColor = "#fff3cd";
+                        el.scrollIntoView({ behavior: "smooth", block: "center" });
+                        return true;
+                    }
+                    return false;
+                }, selectorStr);
+
+                if (!found) break;
+
+                // 1s preview so the button is visible before clicking
+                await new Promise((r) => setTimeout(r, 1000));
+
+                // Click (or dry-run skip) the highlighted button
+                const clicked = await page.evaluate((selStr, shouldDryRun) => {
+                    const all = document.querySelectorAll(selStr);
+                    for (const el of all) {
+                        if (el.getAttribute("data-pending") !== "true") continue;
+
+                        el.removeAttribute("data-pending");
+                        el.style.outline = "";
                         if (!shouldDryRun) {
                             el.click();
-                            el.setAttribute("data-invited", "true");
+                            el.style.backgroundColor = "#c3e6cb"; // green = clicked
+                        } else {
+                            el.style.backgroundColor = "#b8daff"; // blue = dry-run skipped
                         }
-                        clicked++;
+                        el.setAttribute("data-invited", "true");
+                        return true;
                     }
+                    return false;
+                }, selectorStr, dryRun);
 
-                    return clicked;
-                },
-                selectorStr,
-                maxInvites - invitesSent,
-                dryRun,
-            );
+                if (clicked) clickedThisRound++;
+
+                // Per-invite spacing from rate config
+                if (baseDelayMs > 0) {
+                    const jitter = Math.random() * baseDelayMs;
+                    await new Promise((r) => setTimeout(r, baseDelayMs + jitter));
+                }
+            }
 
             invitesSent += clickedThisRound;
             logger.info(
