@@ -1,124 +1,61 @@
 /**
- * inviter.js — The brains of the operation.
+ * inviter.js — The brains of the operation (Phase 5).
  *
- * This file is like a robot that:
- *   1. Opens a hidden web browser (Chrome)
- *   2. Goes to a Facebook post
- *   3. Looks for "Invite" or "Pozvat" buttons
- *   4. Clicks them one by one
- *   5. Writes down what it did
+ * This file orchestrates the full headless workflow:
+ *   1. Launch a hidden Chrome browser (with the saved login profile)
+ *   2. Verify the Facebook session is still valid (auth.js)
+ *   3. Navigate to the politician's Page (auth.js)
+ *   4. Discover posts in the configured date range (scraper.js)
+ *   5. For each pending post (newest first):
+ *        - Open the reactions popup, scroll, click Invite/Pozvat (reactions.js)
+ *        - Record what happened (storage.js, rate-limiter.js)
+ *        - Respect daily/per-post limits and cooldowns (rate-limiter.js)
+ *   6. Save state and close the browser
  *
- * It uses Puppeteer, which is a library that lets code control a browser.
- * Think of it like a puppeteer controlling a puppet, but the puppet is Chrome.
+ * It also supports two "legacy"/testing modes:
+ *   - `waitForLogin: true`  -> open a visible browser so the user can log in
+ *     manually; the saved profile dir then has a working session.
+ *   - `url: "<single post>"` (without `pageUrl`) -> process exactly one post.
+ *     Useful for testing against your own profile with TEST_SELECTORS
+ *     ("Sledovat"/"Follow" instead of "Pozvat"/"Invite").
  */
 
 const puppeteer = require("puppeteer");
 const readline = require("readline/promises");
 const { stdin, stdout } = require("process");
+
 const logger = require("./logger");
 const storage = require("./storage");
 const session = require("./session");
+const config = require("./config");
+const auth = require("./auth");
+const scraper = require("./scraper");
+const reactions = require("./reactions");
+const rateLimiter = require("./rate-limiter");
 
 // ──────────────────────────────────────────────
-// SETTINGS — The button types we're looking for
-// ──────────────────────────────────────────────
-
-/**
- * These are CSS selectors (like search patterns for HTML elements).
- * They look for buttons that say "Pozvat" (Czech for "Invite") or "Invite".
- *
- * Facebook uses aria-label to label buttons for screen readers.
- * We search by that label to find the right buttons to click.
- *
- * Each selector targets a different HTML tag that Facebook might use:
- *   - div[aria-label="Pozvat"][role="button"]  — a <div> acting as a button
- *   - button[aria-label="Pozvat"]               — a real <button> element
- *   - a[role="button"][aria-label*="Pozvat"]    — a <a> link acting as a button
- *
- * Same three patterns again but for English ("Invite").
- */
-const DEFAULT_SELECTORS = [
-    // Czech: "Pozvat" = "Invite"
-    'div[aria-label="Pozvat"][role="button"]',
-    'button[aria-label="Pozvat"]',
-    'a[role="button"][aria-label*="Pozvat"]',
-
-    // English: "Invite"
-    'div[aria-label="Invite"][role="button"]',
-    'button[aria-label="Invite"]',
-    'a[role="button"][aria-label*="Invite"]',
-];
-
-// ──────────────────────────────────────────────
-// STEP 1: Launch the browser
+// Browser / page helpers
 // ──────────────────────────────────────────────
 
 /**
- * Opens a hidden Chrome browser.
+ * Opens a (possibly hidden) Chrome browser using the saved profile.
  *
  * @param {object} options
- * @param {string} [options.profileDir] — Path to a Chrome profile folder (so we stay logged in)
- * @param {boolean} [options.headless=true] — True = invisible browser, False = you can see it
- * @returns {Promise<object>} browser — The browser object we can control
+ * @param {string} [options.profileDir] - Path to a Chrome profile folder (so we stay logged in)
+ * @param {boolean} [options.headless=true] - True = invisible browser, False = you can see it
+ * @returns {Promise<object>} browser
  */
 async function launchBrowser({ profileDir, headless }) {
     const launchOptions = session.getLaunchOptions(profileDir, headless);
-    logger.info(
-        `Launching browser with options: ${JSON.stringify(launchOptions)}`,
-    );
+    logger.info(`Launching browser (headless=${launchOptions.headless}, profileDir=${profileDir || "none"})`);
     return await puppeteer.launch(launchOptions);
 }
 
-// ──────────────────────────────────────────────
-// STEP 2: Set up a page and go to the URL
-// ──────────────────────────────────────────────
-
 /**
- * Creates a new browser tab, sets up the user agent (so Facebook thinks
- * it's a real browser), and navigates to the post URL.
+ * Facebook sometimes shows a black background in headless mode, which makes
+ * text unreadable in screenshots/debug dumps. This forces a light theme.
  *
- * @param {object} browser — The puppeteer browser
- * @param {string} url — The Facebook post URL to visit
- * @returns {Promise<object>} page — The page object (like a browser tab)
- */
-async function createPageAndNavigate(browser, url) {
-    const page = await browser.newPage();
-    logger.info(
-        `Opened new page in browser version: ${await browser.version()}`,
-    );
-
-    // Set a fake user-agent so Facebook doesn't know it's a robot
-    await page.setUserAgent(
-        process.env.USER_AGENT || "Mozilla/5.0 (X11; Linux x86_64)",
-    );
-
-    logger.info(`Navigating to ${url}`);
-
-    // Go to the URL and wait for everything to finish loading
-    const response = await page.goto(url, {
-        waitUntil: "networkidle2", // Wait until no network activity for 500ms
-        timeout: 60000, // Give up after 60 seconds
-    });
-
-    logger.info(
-        `Navigation finished: status=${response ? response.status() : "n/a"}, finalUrl=${page.url()}`,
-    );
-
-    return page;
-}
-
-// ──────────────────────────────────────────────
-// STEP 3: Force a light background (fixes dark mode issues)
-// ──────────────────────────────────────────────
-
-/**
- * Facebook sometimes shows a black background in headless mode.
- * This makes text unreadable. So we inject CSS (style rules) that
- * forces everything to have a white background and dark text.
- *
- * It's like turning off "dark mode" even if Facebook thinks it's on.
- *
- * @param {object} page — The browser page
+ * @param {object} page
  */
 async function forceLightColorScheme(page) {
     await page
@@ -131,171 +68,50 @@ async function forceLightColorScheme(page) {
             `;
             document.head.appendChild(style);
         })
-        .catch(() => {}); // If it fails, no big deal
+        .catch(() => {}); // Not critical - ignore failures
 }
 
-// ──────────────────────────────────────────────
-// STEP 4: Wait for the page to finish rendering
-// ──────────────────────────────────────────────
-
 /**
- * Facebook loads stuff slowly. This waits a bit so all the buttons
- * have time to appear on the page.
+ * Navigates to a URL, fixes dark mode, and gives the page a moment to settle.
  *
- * @param {object} page — The browser page
+ * @param {object} page
+ * @param {string} url
+ * @param {object} [navOptions] - extra options merged into page.goto()
  */
-async function waitForPageToSettle(page) {
-    // Log the page title so we know we're on the right page
-    const title = await page.title().catch(() => "n/a");
-    logger.info(`Page title: ${title}`);
-
-    // Wait 2 seconds for dynamic content (stuff that loads after the page)
-    await page.waitForTimeout(2000);
-}
-
-// ──────────────────────────────────────────────
-// STEP 5: Scan the page — count and log all invite buttons
-// ──────────────────────────────────────────────
-
-/**
- * Looks through the page for all buttons matching our selectors.
- * Doesn't click anything — just counts them and logs some examples
- * so we can see what the robot found.
- *
- * @param {object} page — The browser page
- * @param {string[]} selectors — CSS selectors to search for
- * @returns {Promise<object[]>} stats — Info about each selector (count, samples)
- */
-async function scanInviteButtons(page, selectors) {
-    const stats = await page.evaluate((sels) => {
-        return sels.map((selector) => {
-            // Find all elements matching this selector
-            const matches = Array.from(document.querySelectorAll(selector));
-
-            return {
-                selector,
-                count: matches.length,
-                // Show the first 3 matches so we can see what they look like
-                samples: matches.slice(0, 3).map((element) => ({
-                    ariaLabel: element.getAttribute("aria-label"),
-                    text: (element.textContent || "")
-                        .replace(/\s+/g, " ")
-                        .trim(),
-                    tagName: element.tagName,
-                })),
-            };
-        });
-    }, selectors);
-
-    logger.info(`Selector scan: ${JSON.stringify(stats)}`);
-    return stats;
-}
-
-// ──────────────────────────────────────────────
-// STEP 6: Collect + deduplicate matching buttons
-// ──────────────────────────────────────────────
-
-/**
- * Runs INSIDE the browser page (via page.evaluate).
- * Finds all buttons matching our selectors, removes duplicates,
- * and returns them as a flat array.
- *
- * @param {string[]} selectors — CSS selectors to search for
- * @returns {HTMLElement[]} — Unique matching elements
- */
-function findAllMatchingElements(selectors) {
-    const els = [];
-    selectors.forEach((sel) => {
-        document.querySelectorAll(sel).forEach((e) => els.push(e));
+async function gotoAndSettle(page, url, navOptions = {}) {
+    logger.info(`Navigating to: ${url}`);
+    const response = await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+        ...navOptions,
     });
-    // Remove duplicates (same element matched by different selectors)
-    return Array.from(new Set(els));
+    logger.info(`Navigation finished: status=${response ? response.status() : "n/a"}, finalUrl=${page.url()}`);
+
+    await forceLightColorScheme(page);
+    await new Promise((r) => setTimeout(r, 2000));
 }
 
 // ──────────────────────────────────────────────
-// STEP 7: Click all the buttons (inside the browser)
+// LOGIN MODE: Let the user log in manually
 // ──────────────────────────────────────────────
 
 /**
- * This runs INSIDE the browser tab (not in Node.js).
- * It's like sending a little robot into the page to do the clicking.
+ * Opens the browser visibly on facebook.com and waits for the user to log
+ * in (and switch to the Page's context, if needed). Once logged in, the
+ * user presses Enter in the terminal and the session is saved to profileDir.
  *
- * For each button it finds:
- *   1. Scroll to it (so it's visible on screen)
- *   2. Click it
- *   3. Mark it as "done" (so we don't click it twice)
- *   4. Wait a bit (so Facebook doesn't think we're a spam bot)
- *
- * @param {string[]} selectors — CSS selectors to find buttons
- * @param {number} max — Stop after this many clicks
- * @param {number} delay — Wait this many ms between clicks (random extra 0-500ms added)
- * @returns {Promise<object>} result — { clickedCount, matchedCount }
- */
-async function clickInviteButtonsInPage(selectors, max, delay) {
-    // ── Helper: pause for a bit ──
-    function sleep(ms) {
-        return new Promise((r) => setTimeout(r, ms));
-    }
-
-    // Find all unique buttons
-    const uniq = findAllMatchingElements(selectors);
-    let clickedCount = 0;
-
-    for (const el of uniq) {
-        try {
-            // Skip buttons we've already clicked
-            if (el.getAttribute("data-invited") === "true") continue;
-
-            // Scroll the button into view
-            el.scrollIntoView({
-                block: "center",
-                inline: "center",
-            });
-
-            // Click it
-            el.click();
-
-            // Mark it so we don't click it again
-            el.setAttribute("data-invited", "true");
-            clickedCount++;
-
-            // Wait a random time (delay + up to 500ms extra)
-            // This mimics human behavior — bots click at the exact same speed
-            await sleep(delay + Math.floor(Math.random() * 500));
-
-            // Stop if we've done enough
-            if (clickedCount >= max) break;
-        } catch (e) {
-            // If one button fails (e.g. it disappeared), skip it and move on
-        }
-    }
-
-    return { clickedCount, matchedCount: uniq.length };
-}
-
-// ──────────────────────────────────────────────
-// LOGIN MODE: Let you log in manually
-// ──────────────────────────────────────────────
-
-/**
- * Opens the browser and lets you log in to Facebook manually.
- * The browser shows up on your screen (not hidden) so you can see it.
- * Once logged in, press Enter in the terminal. The session saves to the profile folder.
- *
- * @param {object} page — The browser page (already on Facebook)
+ * @param {object} page - The browser page (already on facebook.com)
  */
 async function waitForManualLogin(page) {
     logger.info("=".repeat(60));
-    logger.info("FACEBOOK LOGIN — Browser is now open on your screen.");
+    logger.info("FACEBOOK LOGIN - Browser is now open on your screen.");
     logger.info("1. Log in to Facebook in that browser window.");
-    logger.info("2. Come back to this terminal.");
-    logger.info("3. Press ENTER to save the session and close the browser.");
+    logger.info("2. Navigate to the politician's Page and switch to its context.");
+    logger.info("3. Come back to this terminal.");
+    logger.info("4. Press ENTER to save the session and close the browser.");
     logger.info("=".repeat(60));
 
-    const rl = readline.createInterface({
-        input: stdin,
-        output: stdout,
-    });
+    const rl = readline.createInterface({ input: stdin, output: stdout });
     await rl.question("");
     rl.close();
 
@@ -303,104 +119,291 @@ async function waitForManualLogin(page) {
 }
 
 // ──────────────────────────────────────────────
-// THE MAIN FUNCTION — Ties everything together
+// Single-post mode (legacy / testing)
 // ──────────────────────────────────────────────
 
 /**
- * This is the big boss function. It's what index.js calls.
+ * Processes exactly one post URL. Used for:
+ *   - Quick manual testing of a single post
+ *   - Testing the scroll/invite loop against your OWN profile post using
+ *     TEST_SELECTORS (Follow/Sledovat instead of Invite/Pozvat)
  *
- * Think of it like a recipe:
- *   1. Heat up the oven     → launch the browser
- *   2. Put the pan in       → open a new tab
- *   3. Go to the right page → navigate to the Facebook post
- *   4. If login mode        → wait for you to press Enter, then exit
- *   5. Fix the lighting     → force light mode
- *   6. Let it preheat       → wait for stuff to load
- *   7. Count the cookies    → scan for buttons
- *   8. Eat the cookies      → click the buttons
- *   9. Write it down        → save what we did
- *  10. Clean up             → close the browser
+ * @param {object} page
+ * @param {string} url
+ * @param {boolean} dryRun
+ * @param {Array<string>} selectors
+ * @returns {Promise<{invited: number, reason: string}>}
+ */
+async function runSinglePost(page, url, dryRun, selectors) {
+    await gotoAndSettle(page, url);
+    await rateLimiter.detectRateLimit(page);
+
+    const budget = rateLimiter.canInviteToday();
+    const maxInvites = dryRun ? config.perPostMax : Math.min(config.perPostMax, budget.remaining);
+
+    const result = await reactions.processPost(page, url, dryRun, selectors, maxInvites);
+
+    if (!dryRun && result.invited > 0) {
+        rateLimiter.recordInvite(result.invited);
+    }
+
+    await storage.saveHistory(url, result.invited, {
+        stoppedReason: result.reason,
+        rateMode: config.rateModeName,
+        dryRun,
+    });
+
+    return result;
+}
+
+// ──────────────────────────────────────────────
+// Page mode (the real workflow)
+// ──────────────────────────────────────────────
+
+/**
+ * The full pipeline: discover posts on the Page, then loop through the
+ * pending ones, opening each post's reactions dialog and inviting people,
+ * all while respecting rate limits.
  *
+ * @param {object} page
+ * @param {object} opts
+ * @returns {Promise<object>} summary
+ */
+async function runPageWorkflow(page, opts) {
+    const { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors } = opts;
+
+    const summary = {
+        postsDiscovered: 0,
+        postsProcessed: 0,
+        totalInvited: 0,
+        stoppedReason: null,
+        results: [],
+    };
+
+    // ── Navigate to the Page ──
+    const navigated = await auth.navigateToPage(page, pageUrl);
+    if (!navigated) {
+        throw new Error(`Could not navigate to page: ${pageUrl}`);
+    }
+
+    // ── Phase 1: Discover posts ──
+    const discovered = await scraper.discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts);
+    summary.postsDiscovered = discovered.length;
+
+    // Skip posts already marked "done" in a previous run
+    const pending = discovered.filter((p) => p.status !== "done");
+    logger.info(`${pending.length}/${discovered.length} discovered posts are pending (not yet done).`);
+
+    if (pending.length === 0) {
+        summary.stoppedReason = "no_pending_posts";
+        return summary;
+    }
+
+    // ── Phase 2: Process posts ──
+    const runStart = Date.now();
+
+    for (const post of pending) {
+        // ── Run-time cap (don't run forever - pick up the rest tomorrow) ──
+        if (Date.now() - runStart > config.runTimeCapMs) {
+            summary.stoppedReason = "run_time_cap";
+            logger.warn(`Run time cap (${config.runTimeCapMs}ms) reached. Stopping for this run.`);
+            break;
+        }
+
+        // ── Rate-limit / daily budget check ──
+        const budget = rateLimiter.canInviteToday();
+        if (!budget.allowed) {
+            summary.stoppedReason = budget.reason;
+            logger.warn(`Rate limiter says STOP (${budget.reason}). Ending run.`);
+            break;
+        }
+
+        logger.info("");
+        logger.info(
+            `=== Post ${summary.postsProcessed + 1}/${pending.length} ` +
+            `(budget remaining: ${budget.remaining}) - ${post.url} ===`,
+        );
+
+        try {
+            await gotoAndSettle(page, post.url);
+            await rateLimiter.detectRateLimit(page);
+
+            // Never let a single post blow the whole daily budget
+            const maxInvites = dryRun
+                ? config.perPostMax
+                : Math.min(config.perPostMax, budget.remaining);
+
+            const result = await reactions.processPost(page, post.url, dryRun, selectors, maxInvites);
+
+            summary.postsProcessed++;
+            summary.totalInvited += result.invited;
+            summary.results.push({ url: post.url, ...result });
+
+            if (!dryRun && result.invited > 0) {
+                rateLimiter.recordInvite(result.invited);
+            }
+
+            if (!dryRun) {
+                await storage.saveHistory(post.url, result.invited, {
+                    stoppedReason: result.reason,
+                    rateMode: config.rateModeName,
+                    dryRun,
+                });
+            }
+
+            // Mark this post as done (dry runs are still marked done so we
+            // don't re-scan them every day; delete posts.json to rescan).
+            scraper.markPostStatus(post.url, {
+                status: "done",
+                invitedCount: dryRun ? 0 : result.invited,
+                error: null,
+            });
+
+            rateLimiter.resetErrorCounter();
+        } catch (err) {
+            logger.error(`Error processing post ${post.url}: ${err.message}`);
+            summary.results.push({ url: post.url, invited: 0, reason: "error", error: err.message });
+
+            scraper.markPostStatus(post.url, {
+                status: "error",
+                invitedCount: 0,
+                error: err.message,
+            });
+
+            // detectRateLimit() throws a recognizable message when it enters cooldown
+            if (err.message.includes("RATE LIMIT DETECTED") || err instanceof auth.SessionExpiredError) {
+                summary.stoppedReason = err instanceof auth.SessionExpiredError ? "session_expired" : "rate_limited";
+                break;
+            }
+            // Otherwise: log it, move on to the next post
+        }
+
+        // ── Cooldown between posts ──
+        const cooldown = config.postCooldownMs + Math.floor(Math.random() * 1000);
+        logger.info(`Post cooldown: waiting ${cooldown}ms before the next post...`);
+        await new Promise((r) => setTimeout(r, cooldown));
+    }
+
+    if (!summary.stoppedReason) {
+        summary.stoppedReason =
+            summary.postsProcessed >= pending.length ? "completed_all_posts" : "loop_exit";
+    }
+
+    return summary;
+}
+
+// ──────────────────────────────────────────────
+// THE MAIN ENTRY POINT - Ties everything together
+// ──────────────────────────────────────────────
+
+/**
  * @param {object} options
- * @param {string} options.url — Facebook post URL
- * @param {number} [options.max=1000] — Max invites
- * @param {number} [options.delay=1000] — Delay between clicks (ms)
- * @param {string} [options.profileDir] — Chrome profile folder
- * @param {boolean} [options.headless=true] — Run invisible
- * @param {boolean} [options.waitForLogin=false] — Just log in, don't run automation
- * @returns {Promise<number>} count — How many buttons were clicked (0 if login mode)
+ * @param {string} [options.pageUrl] - Facebook Page URL (full workflow mode)
+ * @param {string} [options.url] - Single post URL (legacy/testing mode, used if pageUrl is not set)
+ * @param {string} [options.profileDir] - Chrome profile folder (defaults to config.profileDir)
+ * @param {boolean} [options.headless=true] - Run invisible
+ * @param {boolean} [options.waitForLogin=false] - Just log in, don't run automation
+ * @param {boolean} [options.dryRun=true] - Scan + log only, never click (SAFE DEFAULT)
+ * @param {string} [options.dateFrom] - ISO date or "all" (defaults to config.dateFrom)
+ * @param {string} [options.dateTo] - ISO date or "all" (defaults to config.dateTo)
+ * @param {number} [options.maxPosts] - Max posts to process this run (defaults to config.maxPostsPerRun)
+ * @param {Array<string>} [options.selectors] - Override invite selectors (e.g. reactions.TEST_SELECTORS)
+ * @returns {Promise<object>} summary - { postsDiscovered, postsProcessed, totalInvited, stoppedReason, results }
  */
 async function runWithBrowser({
+    pageUrl,
     url,
-    max = 1000,
-    delay = 1000,
-    profileDir,
-    headless = true,
+    profileDir = config.profileDir,
+    headless = config.headless,
     waitForLogin = false,
-}) {
-    // ── Login mode: force the browser to show so you can see it ──
+    dryRun = true,
+    dateFrom = config.dateFrom,
+    dateTo = config.dateTo,
+    maxPosts = config.maxPostsPerRun,
+    selectors = reactions.INVITE_SELECTORS,
+} = {}) {
     const isLoginMode = waitForLogin === true;
     const effectiveHeadless = isLoginMode ? false : headless;
 
-    // ── Step 1: Launch the browser ──
     const browser = await launchBrowser({ profileDir, headless: effectiveHeadless });
 
-    let count = 0;
+    let lockHeld = false;
+    let summary = {
+        postsDiscovered: 0,
+        postsProcessed: 0,
+        totalInvited: 0,
+        stoppedReason: null,
+        results: [],
+    };
 
     try {
-        // ── Step 2: Open a tab and go to the page ──
-        const page = await createPageAndNavigate(browser, url);
+        const page = await browser.newPage();
+        await page.setUserAgent(config.userAgent);
 
-        // ── Step 3: If login mode, pause and wait for you ──
+        // ── Login mode: open facebook.com, wait for the user, then exit ──
         if (isLoginMode) {
+            await gotoAndSettle(page, "https://www.facebook.com/");
             await waitForManualLogin(page);
-            return 0; // Exit early — no automation, just saving session
+            summary.stoppedReason = "login_mode";
+            return summary;
         }
 
-        // ── Step 4: Fix dark mode issues ──
-        await forceLightColorScheme(page);
+        if (!dryRun) {
+            logger.warn(
+                "DRY RUN IS OFF - this run WILL click Invite/Pozvat buttons and send real invites.",
+            );
+        } else {
+            logger.info("DRY RUN - scanning and logging only, no buttons will be clicked.");
+        }
 
-        // ── Step 5: Wait for everything to load ──
-        await waitForPageToSettle(page);
+        // ── Lock: prevent concurrent runs from stepping on each other ──
+        rateLimiter.acquireLock();
+        lockHeld = true;
 
-        // ── Step 6: Look for invite buttons (just counting, not clicking) ──
-        await scanInviteButtons(page, DEFAULT_SELECTORS);
+        // ── Auth: verify session, watch for mid-run expiry ──
+        await auth.ensureLoggedIn(page);
+        auth.setupNavigationWatcher(page);
 
-        // ── Step 7: Actually click the buttons ──
-        // This runs INSIDE the browser (like sending a little robot in)
-        const result = await page.evaluate(
-            clickInviteButtonsInPage,
-            DEFAULT_SELECTORS,
-            max,
-            delay,
-        );
+        if (pageUrl) {
+            // ── Full page workflow ──
+            summary = await runPageWorkflow(page, { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors });
+        } else if (url) {
+            // ── Single-post legacy/testing mode ──
+            const result = await runSinglePost(page, url, dryRun, selectors);
+            summary.postsDiscovered = 1;
+            summary.postsProcessed = 1;
+            summary.totalInvited = result.invited;
+            summary.stoppedReason = result.reason;
+            summary.results.push({ url, ...result });
+        } else {
+            throw new Error(
+                "runWithBrowser requires 'pageUrl' (full workflow), 'url' (single post), or 'waitForLogin: true'.",
+            );
+        }
 
-        // ── Step 8: Read the result ──
-        count =
-            result && typeof result === "object"
-                ? result.clickedCount || 0
-                : result || 0;
-        const matchedCount =
-            result && typeof result === "object" ? result.matchedCount || 0 : 0;
-
+        logger.info("");
         logger.info(
-            `Matched ${matchedCount} candidate elements and clicked ${count} buttons`,
+            `RUN SUMMARY: discovered=${summary.postsDiscovered}, processed=${summary.postsProcessed}, ` +
+            `invited=${summary.totalInvited}, stoppedReason=${summary.stoppedReason}, dryRun=${dryRun}`,
         );
-
-        // ── Step 9: Save to history ──
-        await storage.saveHistory(url, count);
     } catch (err) {
         logger.error("Error in inviter run: " + err.message);
         throw err;
     } finally {
-        // ── Step 10: Close the browser (always runs, even if something broke) ──
+        if (lockHeld) rateLimiter.releaseLock();
         await browser.close();
     }
 
-    return count;
+    return summary;
 }
 
 // ──────────────────────────────────────────────
-// EXPORT — Make the main function available to other files
+// EXPORT
 // ──────────────────────────────────────────────
-module.exports = { runWithBrowser };
+module.exports = {
+    runWithBrowser,
+    // Exposed for testing / reuse
+    launchBrowser,
+    gotoAndSettle,
+    forceLightColorScheme,
+};

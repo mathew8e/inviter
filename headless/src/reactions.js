@@ -542,9 +542,11 @@ async function closeReactionsDialog(page) {
  * @param {string} postUrl
  * @param {boolean} dryRun
  * @param {Array<string>} selectors
+ * @param {number} [maxInvites] — override the per-post limit (e.g. to respect
+ *        the remaining daily budget). Defaults to config.perPostMax.
  * @returns {Promise<{invited: number, reason: string}>}
  */
-async function processPost(page, postUrl, dryRun = false, selectors = INVITE_SELECTORS) {
+async function processPost(page, postUrl, dryRun = false, selectors = INVITE_SELECTORS, maxInvites = config.perPostMax) {
     logger.info(`── Processing post: ${postUrl} ──`);
 
     const opened = await openReactionsDialog(page);
@@ -560,8 +562,14 @@ async function processPost(page, postUrl, dryRun = false, selectors = INVITE_SEL
         return { invited: 0, reason: "no_container_found" };
     }
 
-    const maxPerPost = config.perPostMax;
+    const maxPerPost = Math.max(0, Math.min(config.perPostMax, maxInvites));
     const baseDelay = dryRun ? 0 : config.baseDelayMs;
+
+    if (maxPerPost === 0) {
+        logger.info("maxInvites is 0 (budget exhausted) — closing dialog without inviting.");
+        await closeReactionsDialog(page);
+        return { invited: 0, reason: "no_budget" };
+    }
 
     const result = await scrollAndInvite(
         page,

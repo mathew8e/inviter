@@ -1,6 +1,6 @@
 # PLAN.md — Inviter Headless
 
-> **Last updated:** 2026-06-12 (Phase 0–4 complete, Phase 5 next)
+> **Last updated:** 2026-06-15 (Phase 0–5 complete, Phase 6 next)
 > **Target environment:** HP Ubuntu Server (Ubuntu 20.x, 4–8 GB RAM, home network attic)
 > **Purpose:** Automatically invite everyone who reacts to a politician's Facebook posts to follow the page
 > **Auth method:** Facebook Business Suite (delegated page access)
@@ -49,25 +49,27 @@ The `headless/` folder already has:
 
 | File | Status |
 |------|--------|
-| `src/index.js` | Existing — CLI entry (to be updated Phase 7) |
-| `src/inviter.js` | Existing — basic automation (to be refactored Phase 6) |
+| `src/index.js` | ✅ REWRITTEN (Phase 5) — full CLI: `--page`, `--url`, `--rate-mode`, `--date-from/to`, `--max-posts`, `--test-selectors`, `--dry-run` (default true) |
+| `src/inviter.js` | ✅ REWRITTEN (Phase 5) — orchestrator: launch → auth → discover → loop posts → invite → rate-limit → persist |
 | `src/session.js` | Existing — Chrome launch, headless: "new" ✅ |
-| `src/storage.js` | Existing — JSON persistence (to be enhanced Phase 8) |
-| `src/logger.js` | Existing — Winston console (to be enhanced Phase 9) |
+| `src/storage.js` | ✅ ENHANCED (Phase 5) — `saveHistory(postUrl, count, meta)` + `getHistory()`, matches PLAN.md §9 schema |
+| `src/logger.js` | Existing — Winston console ✅ |
 | `src/config.js` | ✅ NEW (Phase 0) — central config, rate mode table |
 | `src/rate-limiter.js` | ✅ NEW (Phase 1) — daily budget, cooldowns, lock file |
 | `src/auth.js` | ✅ NEW (Phase 2) — login verify, page nav, session watcher |
-| `src/scraper.js` | ✅ NEW (Phase 3) — post discovery, date parsing, dedup |
+| `src/scraper.js` | ✅ NEW (Phase 3) + ENHANCED (Phase 5) — post discovery, date parsing, dedup, `markPostStatus()` |
+| `src/reactions.js` | ✅ NEW (Phase 4) + ENHANCED (Phase 5) — reactions dialog, `processPost(..., maxInvites)` respects per-run budget |
 | `test/phase1-test.js` | ✅ Phase 1 tests (24 passing) |
 | `test/phase3-test.js` | ✅ Phase 3 integration test (auth + scraper) |
 | `test/phase4-test.js` | ✅ Phase 4 unit tests + live dry-run (11 passing) |
+| `test/phase5-test.js` | ✅ Phase 5 unit tests (16 passing) + live dry-run modes (`--live --page`, `--live --url`) |
 | `Dockerfile` | Node 20 + Chromium deps |
 | `docker-compose.yml` | Volume mounts for data/profile |
 | `RULES.md` | ✅ Project conventions, step-by-step breakdown |
 
-**What's done:** Configuration, rate limiting, authentication, post discovery/scraping, reactions dialog (open, scroll, invite loop). Tested with 11 unit tests against mock HTML + live dry-run capability.
+**What's done:** Configuration, rate limiting, authentication, post discovery/scraping, reactions dialog (open, scroll, invite loop), and the full Phase 5 orchestrator wiring everything together in `inviter.js` with a real CLI in `index.js`. Tested with 16 Phase 5 unit tests (markPostStatus, rate-limiter budget/cooldown/lock, storage schema) plus live dry-run capability (`test/phase5-test.js --live --page "<url>"` / `--live --url "<url>"`).
 
-**What's next (Phase 5):** Wire reactions module into inviter.js — orchestrate the full workflow from post discovery through invite clicking with rate-limit coordination.
+**What's next (Phase 6):** Real-world dry-run validation against the configured Facebook Page (verify post discovery + reactions-dialog scanning end-to-end), then a small, supervised `--no-dry-run` test run with `--rate-mode paranoid` and `--max-posts 1` before scheduling via cron (Phase 7+).
 
 ---
 

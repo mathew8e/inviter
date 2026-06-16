@@ -10,12 +10,46 @@ function init() {
     return Promise.resolve();
 }
 
-function saveHistory(url, count) {
+/**
+ * Appends an entry to data/invitations.json.
+ *
+ * Shape (see PLAN.md section 9):
+ *   { id, ts, date, postUrl, invitedCount, peopleNames[], stoppedReason, rateMode }
+ *
+ * @param {string} postUrl
+ * @param {number} count - number of invites sent for this post
+ * @param {object} [meta] - extra fields to merge in (stoppedReason, rateMode, peopleNames, dryRun, ...)
+ * @returns {Promise<number>} the new entry's id
+ */
+function saveHistory(postUrl, count, meta = {}) {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(DB_PATH)) fs.writeFileSync(DB_PATH, JSON.stringify([]));
+
     const entries = JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
-    const entry = { id: entries.length + 1, ts: Date.now(), url, count };
+    const entry = {
+        id: entries.length + 1,
+        ts: Date.now(),
+        date: new Date().toISOString().slice(0, 10),
+        postUrl,
+        invitedCount: count,
+        ...meta,
+    };
     entries.push(entry);
     fs.writeFileSync(DB_PATH, JSON.stringify(entries, null, 2));
     return Promise.resolve(entry.id);
 }
 
-module.exports = { init, saveHistory };
+/**
+ * Returns all invitation history entries.
+ * @returns {Array<object>}
+ */
+function getHistory() {
+    if (!fs.existsSync(DB_PATH)) return [];
+    try {
+        return JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+    } catch {
+        return [];
+    }
+}
+
+module.exports = { init, saveHistory, getHistory };

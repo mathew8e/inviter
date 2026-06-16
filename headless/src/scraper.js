@@ -433,6 +433,44 @@ function mergePostLists(existingPosts, newPosts) {
 }
 
 // ──────────────────────────────────────────────
+// markPostStatus — update a single post's status in posts.json
+// ──────────────────────────────────────────────
+
+/**
+ * Updates a single post's bookkeeping fields in posts.json after it has
+ * been processed (or attempted). Safe to call repeatedly — looks the post
+ * up by URL and merges the given fields.
+ *
+ * @param {string} postUrl
+ * @param {object} updates
+ * @param {string} [updates.status] — "pending" | "done" | "error"
+ * @param {number} [updates.invitedCount] — additional invites to ADD to the running total
+ * @param {string|null} [updates.error] — error message, or null to clear
+ * @returns {boolean} true if the post was found and updated
+ */
+function markPostStatus(postUrl, { status, invitedCount, error } = {}) {
+    const data = loadPostList();
+    const post = data.posts.find((p) => p.url === postUrl);
+
+    if (!post) {
+        logger.warn(`markPostStatus: post not found in posts.json: ${postUrl}`);
+        return false;
+    }
+
+    if (status !== undefined) post.status = status;
+    if (invitedCount) post.invitedCount = (post.invitedCount || 0) + invitedCount;
+    if (error !== undefined) post.error = error;
+    post.processedAt = Date.now();
+
+    savePostList(data);
+    logger.info(
+        `markPostStatus: ${postUrl.slice(0, 60)}... -> status=${post.status}, ` +
+        `invitedCount=${post.invitedCount}, error=${post.error || "none"}`,
+    );
+    return true;
+}
+
+// ──────────────────────────────────────────────
 // discoverPosts — MAIN
 // ──────────────────────────────────────────────
 
@@ -520,6 +558,7 @@ module.exports = {
     discoverPosts,
     loadPostList,
     savePostList,
+    markPostStatus,
     switchToMostRecent,
     extractVisiblePosts,
     scrollToBottom,
