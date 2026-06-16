@@ -692,44 +692,67 @@ async function openReactionsDialogForReel(page) {
     await page.evaluate(() => window.scrollBy(0, 300));
     await new Promise((r) => setTimeout(r, 2000));
 
-    // Step 1: Find and click the Insights button
-    const insightsResult = await page.evaluate(() => {
+    // Helper: scan all interactive elements for an Insights/Přehledy item and click it.
+    const tryClickInsights = () => page.evaluate(() => {
         const keywords = ["insights", "přehledy", "přehled výkonu", "view insights"];
-        const candidates = [
-            ...document.querySelectorAll('[role="button"], a[role="link"], a'),
-        ];
-
-        // Collect unique labels for debug logging (returned regardless of match)
-        const seen = new Set();
-        const allLabels = [];
-        for (const el of candidates) {
-            const raw = (el.getAttribute("aria-label") || el.textContent || "").trim();
-            const short = raw.slice(0, 50);
-            if (short && !seen.has(short)) {
-                seen.add(short);
-                allLabels.push(short);
-                if (allLabels.length >= 30) break;
-            }
-        }
-
+        const candidates = document.querySelectorAll('[role="button"], [role="menuitem"], a[role="link"], a');
         for (const el of candidates) {
             const label = (el.getAttribute("aria-label") || el.textContent || "").trim().toLowerCase();
             if (keywords.some((k) => label.includes(k))) {
                 el.click();
-                return { clicked: label.slice(0, 60), allLabels };
+                return label.slice(0, 60);
             }
         }
-        return { clicked: null, allLabels };
+        return null;
     });
 
-    logger.info(`Reel: buttons visible on page → ${insightsResult.allLabels.join(" | ") || "(none)"}`);
+    // Helper: collect visible button labels (for diagnostics).
+    const collectLabels = () => page.evaluate(() => {
+        const seen = new Set();
+        const out = [];
+        for (const el of document.querySelectorAll('[role="button"], a[role="link"], a')) {
+            const raw = (el.getAttribute("aria-label") || el.textContent || "").trim();
+            const short = raw.slice(0, 50);
+            if (short && !seen.has(short)) { seen.add(short); out.push(short); }
+            if (out.length >= 35) break;
+        }
+        return out;
+    });
 
-    if (!insightsResult.clicked) {
-        logger.warn("Reel: no Insights button found on this page.");
-        return false;
+    // Step 1a: Try to find Insights directly on the page.
+    let insightsClicked = await tryClickInsights();
+
+    if (!insightsClicked) {
+        // Log what IS on the page so we know what we're working with.
+        const labels = await collectLabels();
+        logger.info(`Reel: buttons on page → ${labels.join(" | ") || "(none)"}`);
+
+        // Step 1b: Insights lives inside the ⋯ Menu — click Menu first.
+        const menuClicked = await page.evaluate(() => {
+            const btn =
+                document.querySelector('[aria-label="Menu"]') ||
+                document.querySelector('[aria-label="More options"]') ||
+                document.querySelector('[aria-label="Více možností"]') ||
+                document.querySelector('[aria-label="Další možnosti"]');
+            if (btn) { btn.click(); return btn.getAttribute("aria-label"); }
+            return null;
+        });
+
+        if (!menuClicked) {
+            logger.warn("Reel: neither Insights nor a Menu button found on this page.");
+            return false;
+        }
+
+        logger.info(`Reel: opened Menu ("${menuClicked}"). Looking for Insights inside...`);
+        await new Promise((r) => setTimeout(r, 2000));
+
+        insightsClicked = await tryClickInsights();
+
+        if (!insightsClicked) {
+            logger.warn("Reel: Insights not found in Menu dropdown.");
+            return false;
+        }
     }
-
-    const insightsClicked = insightsResult.clicked;
 
     logger.info(`Reel: clicked Insights ("${insightsClicked}"). Waiting for panel...`);
     await new Promise((r) => setTimeout(r, 3000));
