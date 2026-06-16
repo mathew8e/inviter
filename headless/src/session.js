@@ -24,6 +24,7 @@ function findCachedLinuxChrome() {
 function getLaunchOptions(profileDir, headless) {
     const opts = {
         headless: headless !== undefined ? (headless === false ? false : "new") : "new",
+        defaultViewport: { width: 1280, height: 900 },
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",

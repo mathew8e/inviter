@@ -328,6 +328,7 @@ async function runWithBrowser({
     const browser = await launchBrowser({ profileDir, headless: effectiveHeadless });
 
     let lockHeld = false;
+    let cleanupDone = false;
     let summary = {
         postsDiscovered: 0,
         postsProcessed: 0,
@@ -336,9 +337,34 @@ async function runWithBrowser({
         results: [],
     };
 
+    // Idempotent cleanup — safe to call from both signal handlers and finally.
+    async function cleanup(reason) {
+        if (cleanupDone) return;
+        cleanupDone = true;
+        logger.info(`Cleaning up (reason: ${reason})...`);
+        if (lockHeld) {
+            rateLimiter.releaseLock();
+            lockHeld = false;
+        }
+        try {
+            await browser.close();
+        } catch (_) {}
+        logger.info("Shutdown complete.");
+    }
+
+    // Register signal handlers so Ctrl+C / SIGTERM release the lock cleanly.
+    const onSignal = async (sig) => {
+        logger.info(`\nReceived ${sig} — shutting down gracefully...`);
+        await cleanup(sig);
+        process.exit(0);
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+
     try {
         const page = await browser.newPage();
         await page.setUserAgent(config.userAgent);
+        await page.setViewport({ width: 1280, height: 900 });
 
         // ── Login mode: open facebook.com, wait for the user, then exit ──
         if (isLoginMode) {
@@ -390,8 +416,10 @@ async function runWithBrowser({
         logger.error("Error in inviter run: " + err.message);
         throw err;
     } finally {
-        if (lockHeld) rateLimiter.releaseLock();
-        await browser.close();
+        // Remove signal listeners first so cleanup() isn't called twice.
+        process.removeListener("SIGINT", onSignal);
+        process.removeListener("SIGTERM", onSignal);
+        await cleanup("normal exit");
     }
 
     return summary;
