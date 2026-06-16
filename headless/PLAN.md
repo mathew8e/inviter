@@ -1,6 +1,6 @@
 # PLAN.md — Inviter Headless
 
-> **Last updated:** 2026-06-15 (Phase 0–5 complete, Phase 6 next)
+> **Last updated:** 2026-06-16 (Phase 6 live testing in progress — bugs fixed, reel handling added)
 > **Target environment:** HP Ubuntu Server (Ubuntu 20.x, 4–8 GB RAM, home network attic)
 > **Purpose:** Automatically invite everyone who reacts to a politician's Facebook posts to follow the page
 > **Auth method:** Facebook Business Suite (delegated page access)
@@ -50,15 +50,15 @@ The `headless/` folder already has:
 | File | Status |
 |------|--------|
 | `src/index.js` | ✅ REWRITTEN (Phase 5) — full CLI: `--page`, `--url`, `--rate-mode`, `--date-from/to`, `--max-posts`, `--test-selectors`, `--dry-run` (default true) |
-| `src/inviter.js` | ✅ REWRITTEN (Phase 5) — orchestrator: launch → auth → discover → loop posts → invite → rate-limit → persist |
-| `src/session.js` | Existing — Chrome launch, headless: "new" ✅ |
+| `src/inviter.js` | ✅ REWRITTEN (Phase 5) + ENHANCED (Phase 6) — orchestrator + graceful SIGINT/SIGTERM shutdown + 1280×900 viewport |
+| `src/session.js` | Existing + updated — Chrome launch, headless: "new", defaultViewport: 1280×900 ✅ |
 | `src/storage.js` | ✅ ENHANCED (Phase 5) — `saveHistory(postUrl, count, meta)` + `getHistory()`, matches PLAN.md §9 schema |
 | `src/logger.js` | Existing — Winston console ✅ |
 | `src/config.js` | ✅ NEW (Phase 0) — central config, rate mode table |
 | `src/rate-limiter.js` | ✅ NEW (Phase 1) — daily budget, cooldowns, lock file |
 | `src/auth.js` | ✅ NEW (Phase 2) — login verify, page nav, session watcher |
 | `src/scraper.js` | ✅ NEW (Phase 3) + ENHANCED (Phase 5) — post discovery, date parsing, dedup, `markPostStatus()` |
-| `src/reactions.js` | ✅ NEW (Phase 4) + ENHANCED (Phase 5) — reactions dialog, `processPost(..., maxInvites)` respects per-run budget |
+| `src/reactions.js` | ✅ NEW (Phase 4) + ENHANCED (Phase 5 + 6) — reactions dialog, scroll loop, reel fallback (`openReactionsDialogForReel`), visual highlighting, all offsetParent bugs fixed |
 | `test/phase1-test.js` | ✅ Phase 1 tests (24 passing) |
 | `test/phase3-test.js` | ✅ Phase 3 integration test (auth + scraper) |
 | `test/phase4-test.js` | ✅ Phase 4 unit tests + live dry-run (11 passing) |
@@ -67,9 +67,9 @@ The `headless/` folder already has:
 | `docker-compose.yml` | Volume mounts for data/profile |
 | `RULES.md` | ✅ Project conventions, step-by-step breakdown |
 
-**What's done:** Configuration, rate limiting, authentication, post discovery/scraping, reactions dialog (open, scroll, invite loop), and the full Phase 5 orchestrator wiring everything together in `inviter.js` with a real CLI in `index.js`. Tested with 16 Phase 5 unit tests (markPostStatus, rate-limiter budget/cooldown/lock, storage schema) plus live dry-run capability (`test/phase5-test.js --live --page "<url>"` / `--live --url "<url>"`).
+**What's done:** Configuration, rate limiting, authentication, post discovery/scraping, reactions dialog (open, scroll, invite loop), the full Phase 5 orchestrator, and Phase 6 live testing. Phase 6 uncovered and fixed multiple real-world bugs (see §11.4). Key additions during Phase 6: reel post handling (`openReactionsDialogForReel`), graceful shutdown (SIGINT/SIGTERM), 1280×900 viewport for headless, and many selector/visibility fixes.
 
-**What's next (Phase 6):** Real-world dry-run validation against the configured Facebook Page (verify post discovery + reactions-dialog scanning end-to-end), then a small, supervised `--no-dry-run` test run with `--rate-mode paranoid` and `--max-posts 1` before scheduling via cron (Phase 7+).
+**What's next:** Resolve the page-context issue (Puppeteer stays in personal account context → shows "Follow" instead of "Invite"). Then do a supervised `--no-dry-run` test with `--rate-mode paranoid --max-posts 1` before scheduling via cron (Phase 7).
 
 ---
 
@@ -623,17 +623,35 @@ Before running on the politician's page, just swap the selectors back to `"Pozva
 
 ### 11.3 Test Checklist
 
-- [ ] `--wait-for-login` saves a working session
-- [ ] Session works when loaded headlessly
-- [ ] `--dry-run` logs buttons found without clicking
-- [ ] Reactions popup opens on test post
-- [ ] Scroll loop finds users and terminates (doesn't infinite scroll)
-- [ ] Follow/Invite buttons are clickable
-- [ ] `data-invited` prevents duplicate clicks
-- [ ] Daily limit stops the run
-- [ ] Rate limit error enters cooldown
-- [ ] Lock file prevents concurrent runs
-- [ ] Log contains useful info (counts, errors, timing)
+- [x] `--wait-for-login` saves a working session
+- [x] Session works when loaded headlessly
+- [x] `--dry-run` logs buttons found without clicking
+- [x] Reactions popup opens on test post (`openReactionsDialog` Strategy 1 — "All reactions" unlabelled button)
+- [x] Scroll loop finds users and terminates (50-scroll streak + smart atBottom detection)
+- [x] Follow/Invite buttons found (CSS + text-content fallback)
+- [x] `data-invited` prevents duplicate clicks (set in both real and dry-run mode)
+- [x] Daily limit stops the run
+- [x] Rate limit error enters cooldown
+- [x] Lock file prevents concurrent runs
+- [x] Ctrl+C / SIGTERM releases lock cleanly (graceful shutdown)
+- [x] Headless mode renders 1280×900 viewport (management toolbar visible)
+- [ ] **Page context switched to page manager** (currently stays in personal → "Follow" not "Invite")
+- [ ] Reel post: Insights path opens reactions dialog end-to-end (code written, not yet confirmed)
+- [ ] First supervised `--no-dry-run` run with `--max-posts 1`
+
+### 11.4 Phase 6 Bug Log (Fixed)
+
+| Bug | Root Cause | Fix |
+|-----|-----------|-----|
+| Buttons not found/clicked | `offsetParent === null` on all elements in `position: fixed` Facebook dialog | Removed all `offsetParent` checks; use `getComputedStyle` |
+| Wrong dialog found | Two `[role="dialog"]` in DOM; `querySelector` returns first (comment box) | `querySelectorAll` filtered by computed visibility |
+| No text fallback | `aria-label` sometimes not set by FB's JS at query time | Added `textContent` keyword scan as fallback |
+| Strategy 1 clicked "Like: 54K" | `offsetParent !== null` rejected unlabelled "All reactions" button → fell through to reaction-type button | Removed `offsetParent` from Strategy 1 |
+| Streak of 8 too short | FB mixes invited/uninvited users in list | Streak → 50 + smart end-of-list (atBottom + stable scrollHeight) |
+| Dry-run re-counting buttons | `data-invited` only set outside `if (!dryRun)` | Now set unconditionally |
+| Headless: no management toolbar | Default Puppeteer viewport 800×600 triggers FB mobile layout | `defaultViewport: { width: 1280, height: 900 }` in `session.js`; explicit `page.setViewport` in `inviter.js` |
+| Reel: no reactions toolbar | Reel player URL has no `span[role="toolbar"]` | `openReactionsDialogForReel`: scroll → click Menu → click Insights → click reactions count |
+| Stale lock on Ctrl+C | `SIGINT` kills process before `finally` block | `process.once("SIGINT"/"SIGTERM")` → idempotent `cleanup()` |
 
 ---
 
