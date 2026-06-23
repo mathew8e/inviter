@@ -635,9 +635,9 @@ Before running on the politician's page, just swap the selectors back to `"Pozva
 - [x] Lock file prevents concurrent runs
 - [x] Ctrl+C / SIGTERM releases lock cleanly (graceful shutdown)
 - [x] Headless mode renders 1280×900 viewport (management toolbar visible)
-- [ ] **Page context switched to page manager** (currently stays in personal → "Follow" not "Invite")
-- [ ] Reel post: Insights path opens reactions dialog end-to-end (code written, not yet confirmed)
-- [ ] First supervised `--no-dry-run` run with `--max-posts 1`
+- [x] **Page context switched to page manager** — profile saved in page context, "Invite" confirmed ✅
+- [x] Reel post: Insights path opens reactions dialog end-to-end ✅ (confirmed 2026-06-23)
+- [x] First supervised `--no-dry-run` run — 11 real invites sent on reel post ✅ (2026-06-23)
 
 ### 11.4 Phase 6 Bug Log (Fixed)
 

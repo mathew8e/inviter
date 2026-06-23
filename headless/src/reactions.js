@@ -755,22 +755,62 @@ async function openReactionsDialogForReel(page) {
     }
 
     logger.info(`Reel: clicked Insights ("${insightsClicked}"). Waiting for panel...`);
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 4000));
 
-    // Step 2: Inside the insights panel, find and click the reactions count
-    const reactionsClicked = await page.evaluate(() => {
-        const keywords = ["reaction", "reakc", "likes and reactions"];
+    // Scroll down inside the Insights panel to reveal lazy-loaded items (reactions link is often below fold)
+    await page.evaluate(() => {
+        const panels = [
+            ...document.querySelectorAll('[role="dialog"], [role="complementary"], [role="region"]'),
+        ];
+        for (const p of panels) {
+            if (p.scrollHeight > p.clientHeight) {
+                p.scrollBy(0, 400);
+            }
+        }
+        window.scrollBy(0, 400);
+    });
+    await new Promise((r) => setTimeout(r, 2000));
+
+    // Diagnostic: log what's in the panel
+    const panelLabels = await page.evaluate(() => {
+        const seen = new Set();
+        const out = [];
         const roots = [
             ...document.querySelectorAll('[role="dialog"], [role="complementary"], [role="region"]'),
             document.body,
         ];
         for (const root of roots) {
-            for (const btn of root.querySelectorAll('[role="button"]')) {
-                if (btn.dataset.pending || btn.dataset.invited) continue;
-                const label = (btn.getAttribute("aria-label") || btn.textContent || "").trim().toLowerCase();
-                if (keywords.some((k) => label.includes(k))) {
-                    btn.click();
-                    return label.slice(0, 60);
+            for (const el of root.querySelectorAll('[role="button"], a[href], a[role="link"]')) {
+                const raw = (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 60);
+                if (raw && !seen.has(raw)) { seen.add(raw); out.push(raw); }
+                if (out.length >= 20) break;
+            }
+        }
+        return out;
+    });
+    logger.info(`Reel: Insights panel elements → ${panelLabels.join(" | ") || "(none)"}`);
+
+    // Step 2: Inside the insights panel, find and click the reactions count.
+    // We target <a> links first (Facebook often wraps "see who reacted" in an anchor),
+    // then fall back to [role="button"]. We also scrollIntoView before clicking.
+    const reactionsClicked = await page.evaluate(() => {
+        const keywords = ["reaction", "reakc", "likes and reactions", "see who reacted", "zobrazit kdo"];
+        const roots = [
+            ...document.querySelectorAll('[role="dialog"], [role="complementary"], [role="region"]'),
+            document.body,
+        ];
+        // Prefer <a> links over buttons — the "see who reacted" item is often an anchor
+        const queryOrder = ['a[href], a[role="link"]', '[role="button"]'];
+        for (const root of roots) {
+            for (const query of queryOrder) {
+                for (const el of root.querySelectorAll(query)) {
+                    if (el.dataset.pending || el.dataset.invited) continue;
+                    const label = (el.getAttribute("aria-label") || el.textContent || "").trim().toLowerCase();
+                    if (keywords.some((k) => label.includes(k))) {
+                        el.scrollIntoView({ behavior: "smooth", block: "center" });
+                        el.click();
+                        return label.slice(0, 60);
+                    }
                 }
             }
         }
@@ -783,8 +823,10 @@ async function openReactionsDialogForReel(page) {
     }
 
     logger.info(`Reel: clicked reactions in Insights ("${reactionsClicked}"). Waiting for dialog...`);
-    await new Promise((r) => setTimeout(r, 3000));
+    const urlBeforeReactions = page.url();
+    await new Promise((r) => setTimeout(r, 5000));
 
+    // Case A: a [role="dialog"] opened inline
     const dialogVisible = await page.evaluate(() => {
         const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
         return dialogs.some((d) => {
@@ -795,6 +837,29 @@ async function openReactionsDialogForReel(page) {
 
     if (dialogVisible) {
         logger.info("Reel: reactions dialog opened via Insights path.");
+        return true;
+    }
+
+    // Case B: clicking "see who reacted" navigated to a dedicated reactions page
+    const urlAfterReactions = page.url();
+    if (urlAfterReactions !== urlBeforeReactions) {
+        logger.info(`Reel: navigated to reactions page: ${urlAfterReactions}`);
+        // Wait for the page to fully render
+        await new Promise((r) => setTimeout(r, 3000));
+        // Check again — some reaction pages render a dialog after load
+        const dialogAfterNav = await page.evaluate(() => {
+            const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+            return dialogs.some((d) => {
+                const s = window.getComputedStyle(d);
+                return s.display !== "none" && s.visibility !== "hidden";
+            });
+        });
+        if (dialogAfterNav) {
+            logger.info("Reel: dialog found on navigated reactions page.");
+            return true;
+        }
+        // The reactions page IS the list — treat the page body as the scroll root
+        logger.info("Reel: reactions page loaded (no dialog needed — body is the list).");
         return true;
     }
 
