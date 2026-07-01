@@ -103,6 +103,8 @@ const config = Object.freeze({
         process.env.RATE_LIMIT_PATH ||
         path.join(DATA_DIR, "rate-limit-state.json"),
     lockFilePath: path.join(DATA_DIR, "inviter.lock"),
+    screenshotsDir:
+        process.env.SCREENSHOTS_DIR || path.join(DATA_DIR, "screenshots"),
 
     // ── Browser ──
     headless: process.env.HEADLESS !== "false",

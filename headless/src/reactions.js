@@ -15,6 +15,7 @@
 
 const config = require("./config");
 const logger = require("./logger");
+const { takeScreenshot } = require("./screenshot");
 
 // ──────────────────────────────────────────────
 // Selectors
@@ -506,7 +507,12 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
                     return false;
                 }, dryRun);
 
-                if (clicked) clickedThisRound++;
+                if (clicked) {
+                    clickedThisRound++;
+                } else {
+                    logger.warn("Highlighted button vanished before it could be clicked.");
+                    await takeScreenshot(page, "click-missed");
+                }
 
                 // Per-invite spacing from rate config
                 if (baseDelayMs > 0) {
@@ -917,12 +923,14 @@ async function processPost(page, postUrl, dryRun = false, selectors = INVITE_SEL
 
     if (!opened) {
         logger.warn("Could not open reactions dialog for this post. Skipping.");
+        await takeScreenshot(page, "dialog-not-opened");
         return { invited: 0, reason: "dialog_not_opened" };
     }
 
     const container = await findScrollableContainer(page);
     if (!container) {
         logger.warn("Could not find scrollable container. Closing dialog.");
+        await takeScreenshot(page, "no-container-found");
         await closeReactionsDialog(page);
         return { invited: 0, reason: "no_container_found" };
     }

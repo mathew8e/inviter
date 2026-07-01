@@ -32,6 +32,7 @@ const auth = require("./auth");
 const scraper = require("./scraper");
 const reactions = require("./reactions");
 const rateLimiter = require("./rate-limiter");
+const { takeScreenshot } = require("./screenshot");
 
 // ──────────────────────────────────────────────
 // Browser / page helpers
@@ -263,6 +264,7 @@ async function runPageWorkflow(page, opts) {
             rateLimiter.resetErrorCounter();
         } catch (err) {
             logger.error(`Error processing post ${post.url}: ${err.message}`);
+            await takeScreenshot(page, "post-processing-error");
             summary.results.push({ url: post.url, invited: 0, reason: "error", error: err.message });
 
             scraper.markPostStatus(post.url, {
@@ -362,8 +364,9 @@ async function runWithBrowser({
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
 
+    let page;
     try {
-        const page = await browser.newPage();
+        page = await browser.newPage();
         await page.setUserAgent(config.userAgent);
         await page.setViewport({ width: 1280, height: 900 });
 
@@ -415,6 +418,7 @@ async function runWithBrowser({
         );
     } catch (err) {
         logger.error("Error in inviter run: " + err.message);
+        if (page) await takeScreenshot(page, "run-error");
         throw err;
     } finally {
         // Remove signal listeners first so cleanup() isn't called twice.
