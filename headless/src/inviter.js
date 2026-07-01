@@ -89,6 +89,7 @@ async function gotoAndSettle(page, url, navOptions = {}) {
 
     await forceLightColorScheme(page);
     await new Promise((r) => setTimeout(r, 2000));
+    await auth.dismissCookieBanner(page);
 }
 
 // ──────────────────────────────────────────────

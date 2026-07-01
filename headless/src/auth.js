@@ -54,6 +54,53 @@ class SessionExpiredError extends Error {
 }
 
 // ──────────────────────────────────────────────
+// dismissCookieBanner — EU consent banner blocks the whole page
+// ──────────────────────────────────────────────
+
+/**
+ * Facebook shows an EU cookie consent banner that covers the entire page
+ * until dismissed. If it isn't dismissed, nothing behind it renders/loads
+ * (feed stays empty, reactions dialogs can't open, reels show a stripped
+ * public overlay). Declining optional cookies is enough to unblock the
+ * page — we don't need to accept tracking cookies.
+ *
+ * @param {import('puppeteer').Page} page
+ * @returns {Promise<boolean>} true if a banner was found and dismissed
+ */
+async function dismissCookieBanner(page) {
+    try {
+        const clicked = await page.evaluate(() => {
+            const keywords = [
+                "decline optional cookies",
+                "allow all cookies",
+                "odmítnout nepovinné soubory cookie",
+                "povolit všechny soubory cookie",
+                "only allow essential cookies",
+            ];
+            const candidates = document.querySelectorAll('[role="button"], button');
+            for (const el of candidates) {
+                const label = (el.getAttribute("aria-label") || el.textContent || "").trim().toLowerCase();
+                if (keywords.some((k) => label === k || label.includes(k))) {
+                    el.click();
+                    return label.slice(0, 60);
+                }
+            }
+            return null;
+        });
+
+        if (clicked) {
+            logger.info(`Dismissed cookie consent banner: "${clicked}"`);
+            await new Promise((r) => setTimeout(r, 1500));
+            return true;
+        }
+        return false;
+    } catch (err) {
+        logger.warn("Error dismissing cookie banner: " + err.message);
+        return false;
+    }
+}
+
+// ──────────────────────────────────────────────
 // ensureLoggedIn — verify session is valid
 // ──────────────────────────────────────────────
 
@@ -72,6 +119,8 @@ async function ensureLoggedIn(page) {
         waitUntil: "domcontentloaded",
         timeout: 30000,
     });
+
+    await dismissCookieBanner(page);
 
     const url = page.url();
     logger.info(`Current URL: ${url}`);
@@ -150,6 +199,7 @@ async function navigateToPage(page, pageUrl) {
 
     // Let dynamic content settle
     await new Promise((r) => setTimeout(r, 3000));
+    await dismissCookieBanner(page);
 
     const url = page.url();
     logger.info(`Page URL after navigation: ${url}`);
@@ -219,5 +269,6 @@ module.exports = {
     ensureLoggedIn,
     navigateToPage,
     setupNavigationWatcher,
+    dismissCookieBanner,
     SessionExpiredError,
 };
