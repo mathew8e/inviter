@@ -692,19 +692,26 @@ async function openReactionsDialogForReel(page) {
     await page.evaluate(() => window.scrollBy(0, 300));
     await new Promise((r) => setTimeout(r, 2000));
 
-    // Helper: scan all interactive elements for an Insights/Přehledy item and click it.
-    const tryClickInsights = () => page.evaluate(() => {
-        const keywords = ["insights", "přehledy", "přehled výkonu", "view insights"];
-        const candidates = document.querySelectorAll('[role="button"], [role="menuitem"], a[role="link"], a');
-        for (const el of candidates) {
-            const label = (el.getAttribute("aria-label") || el.textContent || "").trim().toLowerCase();
-            if (keywords.some((k) => label.includes(k))) {
-                el.click();
-                return label.slice(0, 60);
+    // Helper: scan all interactive elements for an Insights/Přehledy item and
+    // click it with a real mouse click (see menuRect comment below for why).
+    const tryClickInsights = async () => {
+        const rect = await page.evaluate(() => {
+            const keywords = ["insights", "přehledy", "přehled výkonu", "view insights"];
+            const candidates = document.querySelectorAll('[role="button"], [role="menuitem"], a[role="link"], a');
+            for (const el of candidates) {
+                const label = (el.getAttribute("aria-label") || el.textContent || "").trim().toLowerCase();
+                if (keywords.some((k) => label.includes(k))) {
+                    el.scrollIntoView({ behavior: "instant", block: "center" });
+                    const r = el.getBoundingClientRect();
+                    return { x: r.x + r.width / 2, y: r.y + r.height / 2, label: label.slice(0, 60) };
+                }
             }
-        }
-        return null;
-    });
+            return null;
+        });
+        if (!rect) return null;
+        await page.mouse.click(rect.x, rect.y);
+        return rect.label;
+    };
 
     // Helper: collect visible button labels (for diagnostics).
     const collectLabels = () => page.evaluate(() => {
@@ -728,20 +735,31 @@ async function openReactionsDialogForReel(page) {
         logger.info(`Reel: buttons on page → ${labels.join(" | ") || "(none)"}`);
 
         // Step 1b: Insights lives inside the ⋯ Menu — click Menu first.
-        const menuClicked = await page.evaluate(() => {
+        // A synthetic el.click() often fails to trigger React's dropdown-open
+        // handler for menu-type components, even though it "succeeds" from the
+        // DOM's point of view (element is real, click event fires) — the
+        // dropdown just never renders. A real mouse click via Puppeteer's
+        // page.mouse.click() dispatches genuine pointer events that React's
+        // event system reliably picks up.
+        const menuRect = await page.evaluate(() => {
             const btn =
                 document.querySelector('[aria-label="Menu"]') ||
                 document.querySelector('[aria-label="More options"]') ||
                 document.querySelector('[aria-label="Více možností"]') ||
                 document.querySelector('[aria-label="Další možnosti"]');
-            if (btn) { btn.click(); return btn.getAttribute("aria-label"); }
-            return null;
+            if (!btn) return null;
+            btn.scrollIntoView({ behavior: "instant", block: "center" });
+            const r = btn.getBoundingClientRect();
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2, label: btn.getAttribute("aria-label") };
         });
 
-        if (!menuClicked) {
+        if (!menuRect) {
             logger.warn("Reel: neither Insights nor a Menu button found on this page.");
             return false;
         }
+
+        await page.mouse.click(menuRect.x, menuRect.y);
+        const menuClicked = menuRect.label;
 
         logger.info(`Reel: opened Menu ("${menuClicked}"). Looking for Insights inside...`);
         await new Promise((r) => setTimeout(r, 2000));
