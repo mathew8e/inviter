@@ -211,14 +211,15 @@ async function clickTabByText(page, texts) {
 // extractVisiblePosts
 // ──────────────────────────────────────────────
 
-async function extractVisiblePosts(page, alreadySeen) {
+async function extractVisiblePosts(page, alreadySeen, pageSlug) {
     // Pass timeRegex string for Strategy 1, and alreadySeen for dedup
     return page.evaluate(
-        (timeTextRegexStr, seenUrls) => {
+        (timeTextRegexStr, seenUrls, pageSlugArg) => {
             const found = [];
             const seenSet = new Set(seenUrls);
             const candidates = new Map(); // cleanUrl -> linkEl
             const timeRegex = new RegExp(timeTextRegexStr);
+            const slugLower = (pageSlugArg || "").toLowerCase();
 
             // Helper: resolve and clean a URL
             function resolveUrl(href) {
@@ -230,12 +231,24 @@ async function extractVisiblePosts(page, alreadySeen) {
                 return clean;
             }
 
+            // Helper: does this /posts/ or /videos/ URL belong to the target page?
+            // Facebook feeds can embed shared/quoted posts from OTHER authors
+            // (e.g. the page shared someone else's post) — those have the
+            // OTHER author's username in the path and must be excluded, or
+            // we'd end up inviting people on a stranger's post.
+            function belongsToTargetPage(clean) {
+                if (!slugLower) return true; // no slug to check against — allow
+                const match = clean.match(/^https:\/\/www\.facebook\.com\/([^/]+)\//i);
+                if (!match) return true; // can't determine author — allow (e.g. reels have no slug)
+                return match[1].toLowerCase() === slugLower;
+            }
+
             // Helper: check if URL looks like a real post (not nav/dashboard)
             function isPostUrl(clean) {
-                // Reel with numeric ID
+                // Reel with numeric ID — no author slug in the URL itself
                 if (/\/reel\/\d+/.test(clean)) return true;
-                // Standard post
-                if (clean.includes("/posts/pfbid") || clean.includes("/posts/")) return true;
+                // Standard post — must be authored by the target page
+                if ((clean.includes("/posts/pfbid") || clean.includes("/posts/")) && belongsToTargetPage(clean)) return true;
                 // Photo with fbid (but not album sets)
                 if (clean.includes("/photo/?") && clean.includes("fbid=") && !clean.includes("set=")) return true;
                 return false;
@@ -250,6 +263,8 @@ async function extractVisiblePosts(page, alreadySeen) {
                 if (!timeRegex.test(text)) continue;
                 const clean = resolveUrl(link.href || link.getAttribute("href"));
                 if (!clean) continue;
+                // Exclude shared/quoted posts authored by someone other than the target page
+                if ((clean.includes("/posts/") || clean.includes("/videos/")) && !belongsToTargetPage(clean)) continue;
                 if (!candidates.has(clean)) candidates.set(clean, link);
             }
 
@@ -380,6 +395,7 @@ async function extractVisiblePosts(page, alreadySeen) {
         },
         TIME_TEXT_REGEX.source,
         Array.from(alreadySeen),
+        pageSlug,
     );
 }
 
@@ -484,6 +500,13 @@ async function discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts) {
         `Discovering posts from ${pageUrl} (max ${maxPosts}, dateFrom ${dateFrom})`,
     );
 
+    // Derive the page's own username/slug (e.g. "DanielKusPlzen" from
+    // "https://www.facebook.com/DanielKusPlzen") so post extraction can
+    // reject posts embedded/shared from OTHER authors' profiles.
+    const slugMatch = pageUrl.match(/facebook\.com\/([^/?]+)/i);
+    const pageSlug = slugMatch ? slugMatch[1] : null;
+    logger.info(`Target page slug: ${pageSlug || "(none — no author filtering)"}`);
+
     await switchToMostRecent(page);
 
     // ── Debug dump: what does the page actually look like right now? ──
@@ -519,7 +542,7 @@ async function discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts) {
     let scrollHeightUnchangedStreak = 0;
 
     while (posts.length < maxPosts && scrollHeightUnchangedStreak < 8) {
-        const found = await extractVisiblePosts(page, alreadySeen);
+        const found = await extractVisiblePosts(page, alreadySeen, pageSlug);
 
         for (const post of found) {
             // Filter out the page URL itself (not a post)
