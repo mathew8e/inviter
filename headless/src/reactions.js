@@ -692,11 +692,14 @@ async function closeReactionsDialog(page) {
 async function openReactionsDialogForReel(page) {
     logger.info("Reel post: trying Insights path to reach reactions...");
 
-    // Give the reel management toolbar extra time to render (headless is slower).
-    await new Promise((r) => setTimeout(r, 3000));
+    // Give the reel management toolbar + sidebar (activity/insights panel)
+    // extra time to render. On a WiFi-connected Pi this can be noticeably
+    // slower than wired — the sidebar was observed still showing loading
+    // skeletons at the 5s mark in a screenshot, so we wait longer here.
+    await new Promise((r) => setTimeout(r, 6000));
     // Scroll slightly — some management elements are lazy-loaded on first scroll.
     await page.evaluate(() => window.scrollBy(0, 300));
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 4000));
 
     // Helper: scan all interactive elements for an Insights/Přehledy item and
     // click it with a real mouse click (see menuRect comment below for why).
@@ -768,7 +771,7 @@ async function openReactionsDialogForReel(page) {
         const menuClicked = menuRect.label;
 
         logger.info(`Reel: opened Menu ("${menuClicked}"). Looking for Insights inside...`);
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 3500));
 
         insightsClicked = await tryClickInsights();
 
@@ -782,7 +785,7 @@ async function openReactionsDialogForReel(page) {
     }
 
     logger.info(`Reel: clicked Insights ("${insightsClicked}"). Waiting for panel...`);
-    await new Promise((r) => setTimeout(r, 4000));
+    await new Promise((r) => setTimeout(r, 6000));
 
     // Scroll down inside the Insights panel to reveal lazy-loaded items (reactions link is often below fold)
     await page.evaluate(() => {
