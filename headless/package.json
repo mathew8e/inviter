@@ -2,14 +2,15 @@
   "name": "inviter-headless",
   "version": "0.1.0",
   "description": "Puppeteer login tool — simplified version",
-  "main": "src/login.js",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node src/login.js",
-    "login": "node src/login.js"
+    "start": "node src/index.js"
   },
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "puppeteer": "^21.0.0"
+    "puppeteer": "^21.0.0",
+    "winston": "^3.19.0",
+    "yargs": "^17.7.2"
   }
 }
