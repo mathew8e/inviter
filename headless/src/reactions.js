@@ -749,7 +749,10 @@ async function openReactionsDialogForReel(page) {
         insightsClicked = await tryClickInsights();
 
         if (!insightsClicked) {
-            logger.warn("Reel: Insights not found in Menu dropdown.");
+            const menuLabels = await collectLabels();
+            logger.warn(
+                `Reel: Insights not found in Menu dropdown. Menu contents → ${menuLabels.join(" | ") || "(none)"}`,
+            );
             return false;
         }
     }
