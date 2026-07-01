@@ -486,6 +486,33 @@ async function discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts) {
 
     await switchToMostRecent(page);
 
+    // ── Debug dump: what does the page actually look like right now? ──
+    // Helps diagnose headless-only rendering differences (missing feed,
+    // different layout, etc). Controlled by SCRAPER_DEBUG=1 env var.
+    if (process.env.SCRAPER_DEBUG === "1") {
+        try {
+            const diag = await page.evaluate(() => ({
+                readyState: document.readyState,
+                bodyScrollHeight: document.body.scrollHeight,
+                bodyInnerHTMLLength: document.body.innerHTML.length,
+                linkCount: document.querySelectorAll("a[href]").length,
+                title: document.title,
+                url: location.href,
+            }));
+            logger.info(
+                `SCRAPER_DEBUG: readyState=${diag.readyState} scrollHeight=${diag.bodyScrollHeight} ` +
+                `htmlLen=${diag.bodyInnerHTMLLength} links=${diag.linkCount} title="${diag.title}" url=${diag.url}`,
+            );
+            const html = await page.content();
+            const dumpPath = path.join(path.dirname(POSTS_PATH), `scraper-debug-${Date.now()}.html`);
+            fs.mkdirSync(path.dirname(dumpPath), { recursive: true });
+            fs.writeFileSync(dumpPath, html, "utf8");
+            logger.info(`SCRAPER_DEBUG: dumped page HTML to ${dumpPath}`);
+        } catch (err) {
+            logger.warn("SCRAPER_DEBUG dump failed: " + err.message);
+        }
+    }
+
     const posts = [];
     let noNewPostsStreak = 0;
 
