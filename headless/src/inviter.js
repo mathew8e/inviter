@@ -258,7 +258,15 @@ async function runPageWorkflow(page, opts) {
         // Skip immediately instead of wasting a page load + timeout on a
         // dialog we already know won't open.
         if (post.contentType === "reel") {
-            logger.info("Skipping reel — Insights doesn't expose reactions for reels.");
+            // Reels can keep accumulating reactions after this run — marking
+            // this "done" means we will NOT revisit it even as its reaction
+            // count grows. Log the post identity + date explicitly so this
+            // decision is traceable later (e.g. if a future run needs to
+            // reconsider reels once Facebook exposes reactions for them).
+            logger.info(
+                `REEL DONE (skipped, not revisited): id=${post.id} date=${post.date} — ` +
+                `Insights doesn't expose reactions for reels. url=${post.url}`,
+            );
             summary.results.push({ url: post.url, invited: 0, reason: "reel_not_supported" });
             scraper.markPostStatus(post.url, { status: "done", invitedCount: 0, error: null });
             continue;
