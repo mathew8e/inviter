@@ -379,7 +379,14 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
 
     let invitesSent = 0;
     let scrollsWithoutNew = 0;
-    const MAX_SCROLLS_WITHOUT_NEW = 50;
+    // Long runs of already-followed reactors (e.g. a politician who has
+    // manually invited people for years) can produce hundreds of
+    // consecutive scrolls with zero new invite buttons, long before the
+    // real end of the list. The "atBottom + scrollHeight stable" check
+    // below is the reliable end-of-list signal — this streak counter is
+    // just a safety net against a stuck/broken scroll container, so it
+    // needs to be generous rather than a realistic termination trigger.
+    const MAX_SCROLLS_WITHOUT_NEW = 300;
     const SCROLL_DELAY = config.scrollDelayMs || 3000;
 
     const selectorStr = selectors.join(", ");
