@@ -53,6 +53,32 @@ async function launchBrowser({ profileDir, headless }) {
 }
 
 /**
+ * Blocks image and media (video/audio) network requests. This automation
+ * never needs to actually see images or play video/reel content — it only
+ * reads DOM structure, aria-labels, and computed styles. Skipping these
+ * downloads meaningfully cuts bandwidth and page-load time, especially on
+ * constrained hardware (e.g. a Raspberry Pi) or slower connections.
+ *
+ * Deliberately NOT blocking stylesheets or fonts: the codebase relies on
+ * getComputedStyle() (visibility/overflow checks) and getBoundingClientRect()
+ * (click coordinates) throughout — missing CSS or font-fallback metrics
+ * could shift layout enough to click the wrong element.
+ *
+ * @param {object} page
+ */
+async function blockUnnecessaryResources(page) {
+    await page.setRequestInterception(true);
+    page.on("request", (req) => {
+        const type = req.resourceType();
+        if (type === "image" || type === "media") {
+            req.abort().catch(() => {});
+        } else {
+            req.continue().catch(() => {});
+        }
+    });
+}
+
+/**
  * Facebook sometimes shows a black background in headless mode, which makes
  * text unreadable in screenshots/debug dumps. This forces a light theme.
  *
@@ -182,14 +208,13 @@ async function runPageWorkflow(page, opts) {
         results: [],
     };
 
-    // ── Navigate to the Page ──
-    const navigated = await auth.navigateToPage(page, pageUrl);
-    if (!navigated) {
-        throw new Error(`Could not navigate to page: ${pageUrl}`);
-    }
-
-    // ── Phase 1: Discover posts ──
-    const discovered = await scraper.discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts);
+    // ── Phase 1: Discover posts via the Professional Dashboard's Content
+    // Library (primary method — never loads video/reel players, gives a
+    // direct per-post Insights link, and reels are cleanly identifiable
+    // up front so we can skip them instead of attempting a doomed
+    // reactions-dialog open). Navigates there directly; no need to visit
+    // the public page URL first.
+    const discovered = await scraper.discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts);
     summary.postsDiscovered = discovered.length;
 
     // Skip posts already marked "done" in a previous run
@@ -225,6 +250,19 @@ async function runPageWorkflow(page, opts) {
             `=== Post ${summary.postsProcessed + 1}/${pending.length} ` +
             `(budget remaining: ${budget.remaining}) - ${post.url} ===`,
         );
+
+        // Reels: Facebook's Content Library Insights page shows only a
+        // static "N Reactions" counter for reels/video stories, with no
+        // functional "see who reacted" trigger — confirmed on multiple
+        // reels regardless of engagement level or network connection.
+        // Skip immediately instead of wasting a page load + timeout on a
+        // dialog we already know won't open.
+        if (post.contentType === "reel") {
+            logger.info("Skipping reel — Insights doesn't expose reactions for reels.");
+            summary.results.push({ url: post.url, invited: 0, reason: "reel_not_supported" });
+            scraper.markPostStatus(post.url, { status: "done", invitedCount: 0, error: null });
+            continue;
+        }
 
         try {
             await gotoAndSettle(page, post.url);
@@ -369,6 +407,7 @@ async function runWithBrowser({
         page = await browser.newPage();
         await page.setUserAgent(config.userAgent);
         await page.setViewport({ width: 1280, height: 900 });
+        await blockUnnecessaryResources(page);
 
         // ── Login mode: open facebook.com, wait for the user, then exit ──
         if (isLoginMode) {
@@ -439,4 +478,5 @@ module.exports = {
     launchBrowser,
     gotoAndSettle,
     forceLightColorScheme,
+    blockUnnecessaryResources,
 };

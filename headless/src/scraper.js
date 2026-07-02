@@ -601,11 +601,187 @@ async function discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts) {
 }
 
 // ──────────────────────────────────────────────
+// discoverPostsFromContentLibrary — PRIMARY discovery method
+// ──────────────────────────────────────────────
+
+const CONTENT_LIBRARY_URL =
+    "https://www.facebook.com/professional_dashboard/content/content_library/" +
+    "?filter=PUBLISHED&post_type=ALL_CONTENT&sort_by=DATE";
+
+/**
+ * Parses a Content Library date string into YYYY-MM-DD.
+ * Formats seen: "Today at 5:22 PM", "Yesterday at 7:14 PM", "Jun 30 at 7:14 PM".
+ */
+function parseContentLibraryDate(text) {
+    if (!text) return "unknown";
+    const now = new Date();
+
+    if (/^today/i.test(text)) {
+        return now.toISOString().slice(0, 10);
+    }
+    if (/^yesterday/i.test(text)) {
+        return new Date(now.getTime() - 86400 * 1000).toISOString().slice(0, 10);
+    }
+    // "Jun 30 at 7:14 PM" — no year given, assume current year (or previous
+    // year if that would put it in the future, e.g. testing in January).
+    const match = text.match(/^([A-Za-z]{3,9})\s+(\d{1,2})/);
+    if (match) {
+        const guess = new Date(`${match[1]} ${match[2]}, ${now.getFullYear()}`);
+        if (!isNaN(guess.getTime())) {
+            if (guess.getTime() > now.getTime() + 86400 * 1000) {
+                guess.setFullYear(guess.getFullYear() - 1);
+            }
+            return guess.toISOString().slice(0, 10);
+        }
+    }
+    return "unknown";
+}
+
+/**
+ * Extracts every content row currently rendered in the Content Library
+ * table. Each row has an <a href="/content/insights/?content_id=...">
+ * link — we use that as both the unique ID and the direct navigation
+ * target (skips loading the post/reel/video itself entirely).
+ *
+ * @param {import('puppeteer').Page} page
+ * @returns {Promise<Array<{contentId, insightsUrl, dateText, isVideoStory, caption}>>}
+ */
+async function extractContentLibraryRows(page) {
+    return page.evaluate(() => {
+        const rows = [];
+        const seen = new Set();
+        const links = document.querySelectorAll('a[href*="/content/insights/"]');
+
+        for (const link of links) {
+            const href = link.getAttribute("href") || "";
+            const idMatch = href.match(/content_id=([^&]+)/);
+            if (!idMatch) continue;
+            const contentId = decodeURIComponent(idMatch[1]);
+            if (seen.has(contentId)) continue;
+            seen.add(contentId);
+
+            // Walk up to the row/gridcell container to read its full text
+            // (caption, "Published • <date>", and "Video story" marker).
+            const row =
+                link.closest('[role="row"], [role="gridcell"]') ||
+                link.closest("tr") ||
+                link.parentElement;
+            const rowText = row ? row.textContent || "" : "";
+
+            const dateMatch = rowText.match(
+                /(Today|Yesterday|[A-Za-z]{3,9}\s+\d{1,2})\s+at\s+\d{1,2}:\d{2}\s*(AM|PM)?/i,
+            );
+
+            rows.push({
+                contentId,
+                insightsUrl:
+                    "https://www.facebook.com/content/insights/?content_id=" +
+                    encodeURIComponent(contentId) +
+                    "&entry_point=ProdashCometContentLibraryTable",
+                dateText: dateMatch ? dateMatch[0] : "",
+                isVideoStory: /video story/i.test(rowText),
+                caption: rowText.slice(0, 150),
+            });
+        }
+        return rows;
+    });
+}
+
+/**
+ * Discovers posts via the Professional Dashboard's Content Library instead
+ * of scraping the public page feed. Advantages over feed scraping:
+ *   - Never loads video/reel players — just a metrics table. Much less
+ *     bandwidth and rendering work, especially on constrained hardware.
+ *   - Gives a direct /content/insights/?content_id=... link per post,
+ *     which embeds the post with a working reactions toolbar (regular
+ *     posts) — no need to guess "Posts tab" selectors or deal with
+ *     shared/quoted posts contaminating results (content_id always
+ *     belongs to the page's own content).
+ *   - Cleanly identifies reels ("Video story" rows) up front, so they
+ *     can be skipped without ever attempting to open a reactions dialog
+ *     that we know Facebook doesn't expose for them via this UI.
+ *
+ * @param {import('puppeteer').Page} page
+ * @param {string} dateFrom — ISO date or "all"
+ * @param {string} dateTo — ISO date or "all"
+ * @param {number} maxPosts
+ * @returns {Promise<Post[]>}
+ */
+async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts) {
+    const existing = loadPostList();
+    const alreadySeen = new Set(existing.posts.map((p) => p.url).filter(Boolean));
+
+    logger.info(
+        `Discovering posts from Content Library (max ${maxPosts}, dateFrom ${dateFrom})`,
+    );
+
+    await page.goto(CONTENT_LIBRARY_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await new Promise((r) => setTimeout(r, 5000));
+
+    const posts = [];
+    let scrollHeightUnchangedStreak = 0;
+
+    while (posts.length < maxPosts && scrollHeightUnchangedStreak < 5) {
+        const rows = await extractContentLibraryRows(page);
+
+        for (const row of rows) {
+            if (alreadySeen.has(row.insightsUrl)) continue;
+            alreadySeen.add(row.insightsUrl);
+
+            const post = {
+                url: row.insightsUrl,
+                id: row.contentId,
+                timestamp: null,
+                date: parseContentLibraryDate(row.dateText),
+                status: "pending",
+                invitedCount: 0,
+                processedAt: null,
+                error: null,
+                contentType: row.isVideoStory ? "reel" : "post",
+            };
+
+            posts.push(post);
+            logger.info(
+                `Post #${posts.length}: ${post.date} [${post.contentType}] — ${row.caption.slice(0, 60)}`,
+            );
+            if (posts.length >= maxPosts) break;
+        }
+
+        const grew = await scrollToBottom(page);
+        await new Promise((r) => setTimeout(r, 2500));
+
+        if (!grew) {
+            scrollHeightUnchangedStreak++;
+        } else {
+            scrollHeightUnchangedStreak = 0;
+        }
+    }
+
+    logger.info(`Discovered ${posts.length} posts total from Content Library.`);
+
+    const filtered = filterByDate(posts, dateFrom, dateTo);
+    logger.info(`After date filtering (${dateFrom} to ${dateTo}): ${filtered.length} posts`);
+
+    const merged = mergePostLists(existing.posts, filtered);
+    const result = {
+        scrapedAt: Date.now(),
+        pageUrl: CONTENT_LIBRARY_URL,
+        posts: merged,
+    };
+    savePostList(result);
+
+    return filtered;
+}
+
+// ──────────────────────────────────────────────
 // Export
 // ──────────────────────────────────────────────
 
 module.exports = {
     discoverPosts,
+    discoverPostsFromContentLibrary,
+    extractContentLibraryRows,
+    parseContentLibraryDate,
     loadPostList,
     savePostList,
     markPostStatus,
