@@ -188,6 +188,17 @@ async function runSinglePost(page, url, dryRun, selectors) {
         dryRun,
     });
 
+    // --url mode previously never touched posts.json, so its per-post
+    // invitedCount stayed stuck at whatever an earlier --page run had left
+    // it at (e.g. 0 from a dry run) even after real invites were sent here.
+    // Mirror the --page mode bookkeeping so posts.json stays accurate
+    // regardless of which mode was used to process a post.
+    scraper.markPostStatus(url, {
+        status: "done",
+        invitedCount: dryRun ? 0 : result.invited,
+        error: null,
+    });
+
     return result;
 }
 
@@ -258,19 +269,19 @@ async function runPageWorkflow(page, opts) {
             `(budget remaining: ${budget.remaining}) - ${post.url} ===`,
         );
 
-        // Content Library labels BOTH genuine Reels and ephemeral Stories
-        // as "Video story" — that text alone can't distinguish them. Real
-        // Reels DO expose a working reactions dialog via their Insights
-        // page (same embedded-post layout as regular posts); Stories do
-        // not (stats-only dashboard, no reactions toolbar). Rather than
-        // guessing from the ambiguous label, we always attempt the normal
-        // flow below — reactions.processPost() already fails gracefully
-        // (dialog_not_opened) when nothing is actually there.
-        if (post.contentType === "reel") {
+        // "Video story" items are ephemeral Story reposts of an existing
+        // post — confirmed live (2026-07-02) they never expose a working
+        // reactions dialog, and the underlying content is already
+        // discovered separately as its own "post" entry, so nothing is
+        // lost by skipping them outright.
+        if (post.contentType === "story") {
             logger.info(
-                `Video story (Reel or Story — Content Library can't tell them apart): ` +
-                `id=${post.id} date=${post.date} — attempting reactions dialog anyway.`,
+                `STORY DONE (skipped, duplicate of an existing post): id=${post.id} date=${post.date} — ` +
+                `url=${post.url}`,
             );
+            summary.results.push({ url: post.url, invited: 0, reason: "story_not_supported" });
+            scraper.markPostStatus(post.url, { status: "done", invitedCount: 0, error: null });
+            continue;
         }
 
         try {

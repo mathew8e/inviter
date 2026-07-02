@@ -737,7 +737,13 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts)
                 invitedCount: 0,
                 processedAt: null,
                 error: null,
-                contentType: row.isVideoStory ? "reel" : "post",
+                // Content Library labels these "Video story" — confirmed live
+                // (2026-07-02) these are ephemeral Story reposts of an
+                // existing post, not standalone Reels, and never expose a
+                // working reactions dialog. The underlying post is already
+                // discovered separately as its own "post" entry, so nothing
+                // is lost by treating/skipping these as duplicates.
+                contentType: row.isVideoStory ? "story" : "post",
             };
 
             posts.push(post);

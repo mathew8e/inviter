@@ -68,18 +68,42 @@ function getWarningsAndErrors(lines) {
 
 function gatherData() {
     const postList = scraper.loadPostList();
-    const posts = postList.posts || [];
+    const allPosts = postList.posts || [];
     const history = storage.getHistory();
     const rateState = rateLimiter.getState();
     const recentLogLines = getRecentLogLines(200);
     const warningsAndErrors = getWarningsAndErrors(recentLogLines).slice(0, 40);
 
+    // Stories are ephemeral reposts of an existing post with no working
+    // reactions dialog — the underlying content is already shown as its
+    // own "post" entry, so Stories are excluded from the list entirely
+    // rather than cluttering it with duplicate/non-actionable rows.
+    const posts = allPosts.filter((p) => p.contentType !== "story");
+
+    // Group invite-history entries by post URL so each post shows ONE row
+    // with every run against it nested inside, instead of two separate,
+    // hard-to-cross-reference tables (posts.json snapshot vs invitations.json
+    // log). Also makes the invited-count bug (posts.json going stale after
+    // a --url mode run) moot — the total here is summed directly from the
+    // history log, which is always accurate.
+    const historyByUrl = new Map();
+    for (const h of history) {
+        if (!historyByUrl.has(h.postUrl)) historyByUrl.set(h.postUrl, []);
+        historyByUrl.get(h.postUrl).push(h);
+    }
+
+    const postRows = posts.map((p) => {
+        const runs = (historyByUrl.get(p.url) || []).slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
+        const totalInvited = runs.reduce((sum, r) => sum + (r.invitedCount || 0), 0);
+        return { ...p, runs, totalInvited };
+    });
+    postRows.sort((a, b) => (b.processedAt || 0) - (a.processedAt || 0));
+
     const postsByStatus = { pending: 0, done: 0, error: 0 };
     for (const p of posts) {
         postsByStatus[p.status] = (postsByStatus[p.status] || 0) + 1;
     }
-    const reelCount = posts.filter((p) => p.contentType === "reel").length;
-    const postCount = posts.filter((p) => p.contentType !== "reel").length;
+    const storyCount = allPosts.filter((p) => p.contentType === "story").length;
 
     const totalInvitedAllTime = history.reduce((sum, h) => sum + (h.invitedCount || 0), 0);
 
@@ -87,11 +111,9 @@ function gatherData() {
         runActive: isRunActive(),
         rateState,
         postsByStatus,
-        reelCount,
-        postCount,
+        storyCount,
         totalPosts: posts.length,
-        posts: posts.slice().sort((a, b) => (b.processedAt || 0) - (a.processedAt || 0)).slice(0, 30),
-        recentHistory: history.slice(-15).reverse(),
+        postRows: postRows.slice(0, 30),
         totalInvitedAllTime,
         warningsAndErrors,
         scrapedAt: postList.scrapedAt,
@@ -187,36 +209,36 @@ function renderPage(data) {
   ${data.rateState.isCooldown ? `<div class="cooldown">⚠️ In cooldown until ${esc(fmtTime(data.rateState.cooldownUntil))} — consecutive errors: ${data.rateState.consecutiveErrors}</div>` : ""}
 
   <section>
-    <h2>Recent posts (${data.totalPosts} total — ${data.postCount} posts, ${data.reelCount} reels)</h2>
-    ${data.posts.length === 0 ? '<div class="empty">No posts discovered yet.</div>' : `
+    <h2>Posts (${data.totalPosts} shown — ${data.storyCount} Story reposts hidden, no reactions dialog)</h2>
+    ${data.postRows.length === 0 ? '<div class="empty">No posts discovered yet.</div>' : `
     <table>
-      <tr><th>Date</th><th>Type</th><th>Status</th><th>Invited</th><th>Processed</th><th>Error</th><th>Link</th></tr>
-      ${data.posts.map((p) => `
+      <tr><th></th><th>Date</th><th>Type</th><th>Status</th><th>Total invited</th><th>Runs</th><th>Link</th></tr>
+      ${data.postRows.map((p) => `
       <tr>
+        <td>${p.runs.length > 0 ? `<button onclick="this.closest('tr').nextElementSibling.style.display = this.closest('tr').nextElementSibling.style.display === 'none' ? '' : 'none';" style="cursor:pointer;border:none;background:none;font-size:14px;">▸</button>` : ""}</td>
         <td>${esc(p.date)}</td>
         <td>${esc(p.contentType || "post")}</td>
         <td>${statusBadge(p.status)}</td>
-        <td>${p.invitedCount || 0}</td>
-        <td>${esc(fmtTime(p.processedAt))}</td>
-        <td class="mono">${p.error ? esc(p.error) : "—"}</td>
+        <td>${p.totalInvited}</td>
+        <td>${p.runs.length}</td>
         <td>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">View</a>` : "—"}</td>
-      </tr>`).join("")}
-    </table>`}
-  </section>
-
-  <section>
-    <h2>Recent invite history</h2>
-    ${data.recentHistory.length === 0 ? '<div class="empty">No invites sent yet.</div>' : `
-    <table>
-      <tr><th>Date</th><th>Invited</th><th>Rate mode</th><th>Dry run</th><th>Stopped reason</th><th>Link</th></tr>
-      ${data.recentHistory.map((h) => `
-      <tr>
-        <td>${esc(h.date)}</td>
-        <td>${h.invitedCount || 0}</td>
-        <td>${esc(h.rateMode || "—")}</td>
-        <td>${h.dryRun ? "yes" : "no"}</td>
-        <td>${esc(h.stoppedReason || "—")}</td>
-        <td>${h.postUrl ? `<a href="${esc(h.postUrl)}" target="_blank" rel="noopener">View</a>` : "—"}</td>
+      </tr>
+      <tr style="display:none;">
+        <td></td>
+        <td colspan="6">
+          ${p.runs.length === 0 ? '<span class="empty">No runs recorded yet for this post.</span>' : `
+          <table>
+            <tr><th>When</th><th>Invited</th><th>Rate mode</th><th>Dry run</th><th>Stopped reason</th></tr>
+            ${p.runs.map((r) => `
+            <tr>
+              <td>${esc(fmtTime(r.ts))}</td>
+              <td>${r.invitedCount || 0}</td>
+              <td>${esc(r.rateMode || "—")}</td>
+              <td>${r.dryRun ? "yes" : "no"}</td>
+              <td>${esc(r.stoppedReason || "—")}</td>
+            </tr>`).join("")}
+          </table>`}
+        </td>
       </tr>`).join("")}
     </table>`}
   </section>

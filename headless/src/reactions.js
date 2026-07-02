@@ -583,7 +583,10 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
                 const container = scrollables[0];
                 const heightBefore = container.scrollHeight;
                 const before = container.scrollTop;
-                container.scrollBy(0, container.clientHeight * 0.8);
+                // Smaller step (was 0.8x) so consecutive scans overlap more —
+                // a full-height jump risks skipping rows that finish
+                // rendering between two scans on a fast-loading list.
+                container.scrollBy(0, container.clientHeight * 0.5);
 
                 // atBottom: we've reached the end of the scroll container
                 const atBottom =
