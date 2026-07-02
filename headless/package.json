@@ -4,7 +4,8 @@
   "description": "Puppeteer login tool — simplified version",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "dashboard": "node src/dashboard.js"
   },
   "author": "",
   "license": "MIT",
