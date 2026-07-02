@@ -258,25 +258,19 @@ async function runPageWorkflow(page, opts) {
             `(budget remaining: ${budget.remaining}) - ${post.url} ===`,
         );
 
-        // Reels: Facebook's Content Library Insights page shows only a
-        // static "N Reactions" counter for reels/video stories, with no
-        // functional "see who reacted" trigger — confirmed on multiple
-        // reels regardless of engagement level or network connection.
-        // Skip immediately instead of wasting a page load + timeout on a
-        // dialog we already know won't open.
+        // Content Library labels BOTH genuine Reels and ephemeral Stories
+        // as "Video story" — that text alone can't distinguish them. Real
+        // Reels DO expose a working reactions dialog via their Insights
+        // page (same embedded-post layout as regular posts); Stories do
+        // not (stats-only dashboard, no reactions toolbar). Rather than
+        // guessing from the ambiguous label, we always attempt the normal
+        // flow below — reactions.processPost() already fails gracefully
+        // (dialog_not_opened) when nothing is actually there.
         if (post.contentType === "reel") {
-            // Reels can keep accumulating reactions after this run — marking
-            // this "done" means we will NOT revisit it even as its reaction
-            // count grows. Log the post identity + date explicitly so this
-            // decision is traceable later (e.g. if a future run needs to
-            // reconsider reels once Facebook exposes reactions for them).
             logger.info(
-                `REEL DONE (skipped, not revisited): id=${post.id} date=${post.date} — ` +
-                `Insights doesn't expose reactions for reels. url=${post.url}`,
+                `Video story (Reel or Story — Content Library can't tell them apart): ` +
+                `id=${post.id} date=${post.date} — attempting reactions dialog anyway.`,
             );
-            summary.results.push({ url: post.url, invited: 0, reason: "reel_not_supported" });
-            scraper.markPostStatus(post.url, { status: "done", invitedCount: 0, error: null });
-            continue;
         }
 
         try {
