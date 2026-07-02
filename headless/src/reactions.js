@@ -148,19 +148,39 @@ async function openReactionsDialog(page) {
     await new Promise((r) => setTimeout(r, 2000));
 
     const strategies = [
-        // Strategy 1 (primary): Find span[role="toolbar"] — the reactions bar.
-        // Inside it, click the div[role="button"] that has NO aria-label.
-        // That's the "All reactions" button; the individual reaction-type icons
-        // (Like, Angry…) DO have aria-labels like "Like: 54K people".
+        // Strategy 1 (primary): Find span[role="toolbar"] — the reactions bar
+        // (individual reaction-type icons: Like, Haha, Angry… each WITH an
+        // aria-label like "Like: 54K people"). The "All reactions: N" button
+        // that opens the FULL unfiltered list is NOT inside the toolbar — it's
+        // a SIBLING div next to it, inside the toolbar's parent container.
+        // Confirmed via live DOM: <div><span role="toolbar">...icons...</span>
+        // <div><div role="button">All reactions: N ...</div></div></div>
+        // We must check the parent container first, or we end up clicking a
+        // reaction-type icon and opening a FILTERED (e.g. Like-only) dialog.
         // offsetParent checks are intentionally omitted — Facebook's fixed-position
         // overlay makes offsetParent === null even for visible buttons.
         async () => {
             return await page.evaluate(() => {
                 const toolbars = document.querySelectorAll('span[role="toolbar"]');
                 for (const toolbar of toolbars) {
+                    // Prefer an unlabelled div[role="button"] in the toolbar's
+                    // parent container (sibling of the toolbar) — that's the
+                    // real "All reactions" trigger.
+                    const container = toolbar.parentElement;
+                    if (container) {
+                        const siblingButtons = container.querySelectorAll('div[role="button"]');
+                        for (const btn of siblingButtons) {
+                            if (toolbar.contains(btn)) continue; // skip reaction-type icons
+                            if (!btn.getAttribute("aria-label")) {
+                                btn.click();
+                                return `container → "All reactions" (sibling of toolbar, no aria-label)`;
+                            }
+                        }
+                    }
+
                     const buttons = toolbar.querySelectorAll('div[role="button"]');
 
-                    // Prefer the unlabelled button = "All reactions"
+                    // Fallback: an unlabelled button directly inside the toolbar
                     for (const btn of buttons) {
                         if (!btn.getAttribute("aria-label")) {
                             btn.click();
@@ -168,10 +188,11 @@ async function openReactionsDialog(page) {
                         }
                     }
 
-                    // Fallback: any button inside the toolbar
+                    // Last resort: any button inside the toolbar (opens a
+                    // FILTERED single-reaction-type dialog, e.g. Like-only)
                     for (const btn of buttons) {
                         btn.click();
-                        return `toolbar → ${btn.getAttribute("aria-label") || "unlabeled"}`;
+                        return `toolbar → ${btn.getAttribute("aria-label") || "unlabeled"} (FILTERED fallback)`;
                     }
                 }
                 return null;
