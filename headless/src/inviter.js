@@ -53,13 +53,20 @@ async function launchBrowser({ profileDir, headless }) {
 }
 
 /**
- * Blocks image and media (video/audio) network requests. This automation
- * never needs to actually see images or play video/reel content — it only
- * reads DOM structure, aria-labels, and computed styles. Skipping these
- * downloads meaningfully cuts bandwidth and page-load time, especially on
- * constrained hardware (e.g. a Raspberry Pi) or slower connections.
+ * Blocks media (video/audio) network requests. This automation never plays
+ * reel/video content — it only reads DOM structure, aria-labels, and
+ * computed styles — so skipping video/audio bytes meaningfully cuts
+ * bandwidth, especially on constrained hardware (e.g. a Raspberry Pi).
  *
- * Deliberately NOT blocking stylesheets or fonts: the codebase relies on
+ * Deliberately NOT blocking images: Facebook's infinite-scroll reactions
+ * list appears to use image load completion / real avatar box heights as
+ * part of how it decides whether more content should load. With images
+ * blocked, a post with ~2K reactions finished "processing" in 13 seconds
+ * instead of the many minutes it genuinely takes — the scroll-height-grew
+ * check was fooled into thinking it had reached the end of the list almost
+ * immediately. Confirmed by comparing against an unblocked run.
+ *
+ * Also NOT blocking stylesheets or fonts: the codebase relies on
  * getComputedStyle() (visibility/overflow checks) and getBoundingClientRect()
  * (click coordinates) throughout — missing CSS or font-fallback metrics
  * could shift layout enough to click the wrong element.
@@ -70,7 +77,7 @@ async function blockUnnecessaryResources(page) {
     await page.setRequestInterception(true);
     page.on("request", (req) => {
         const type = req.resourceType();
-        if (type === "image" || type === "media") {
+        if (type === "media") {
             req.abort().catch(() => {});
         } else {
             req.continue().catch(() => {});
