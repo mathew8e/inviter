@@ -57,6 +57,7 @@ async function main() {
     }
 
     const remaining = new Set();
+    const allPeopleSeen = new Set(); // every distinct reactor, invite-eligible or not — for sanity-checking against the reaction count shown on the post
     const selectorStr = reactions.INVITE_SELECTORS.join(", ");
     let scrollsWithoutNew = 0;
     let totalScrolls = 0;
@@ -109,15 +110,35 @@ async function main() {
                     ids.push(getPersonId(el));
                 }
             }
-            return ids;
+
+            // Also collect every distinct profile link visible right now,
+            // invite-eligible or not — lets us sanity-check total reactor
+            // coverage against the reaction count shown on the post itself.
+            const allSeen = [];
+            for (const root of roots) {
+                const scrollables = Array.from(root.querySelectorAll("*")).filter(el => {
+                    const s = window.getComputedStyle(el);
+                    return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
+                }).sort((a, b) => b.scrollHeight - a.scrollHeight);
+                const container = scrollables[0] || root;
+                for (const a of container.querySelectorAll("a[href]")) {
+                    const href = a.getAttribute("href") || "";
+                    if (href && href !== "#" && !href.startsWith("javascript:")) {
+                        allSeen.push(href.split("?")[0].split("#")[0]);
+                    }
+                }
+            }
+
+            return { ids, allSeen };
         }, selectorStr);
 
         const before = remaining.size;
-        for (const id of found) remaining.add(id);
+        for (const id of found.ids) remaining.add(id);
+        for (const id of found.allSeen) allPeopleSeen.add(id);
         scrollsWithoutNew = remaining.size === before ? scrollsWithoutNew + 1 : 0;
 
         if (totalScrolls % 10 === 0) {
-            console.log(`... scroll #${totalScrolls}, ${remaining.size} found so far`);
+            console.log(`... scroll #${totalScrolls}, ${remaining.size} invite-eligible / ${allPeopleSeen.size} total distinct reactors seen so far`);
         }
 
         const heightBefore = await getScrollHeight();
@@ -162,6 +183,7 @@ async function main() {
     }
 
     console.log(`Total scrolls performed: ${totalScrolls}`);
+    console.log(`Total distinct reactors seen (any type, invited or not): ${allPeopleSeen.size}`);
     console.log(`RESULT: ${remaining.size} distinct people still show an Invite/Pozvat button.`);
     if (remaining.size > 0) {
         console.log("Sample identifiers:", Array.from(remaining).slice(0, 15));
