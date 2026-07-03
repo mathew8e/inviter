@@ -90,7 +90,20 @@ async function main() {
                     const a = node.querySelector("a[href]");
                     if (a) {
                         const href = a.getAttribute("href") || "";
-                        if (href) return href.split("?")[0].split("#")[0];
+                        if (href) {
+                            // profile.php?id=NNNN links carry the identifier in
+                            // the query string — naive stripping collapses every
+                            // such person into the same generic identifier.
+                            try {
+                                const url = new URL(href, "https://www.facebook.com");
+                                if (url.pathname === "/profile.php" && url.searchParams.has("id")) {
+                                    return url.pathname + "?id=" + url.searchParams.get("id");
+                                }
+                                return url.origin + url.pathname;
+                            } catch (e) {
+                                return href.split("?")[0].split("#")[0];
+                            }
+                        }
                     }
                     node = node.parentElement;
                 }
@@ -124,7 +137,16 @@ async function main() {
                 for (const a of container.querySelectorAll("a[href]")) {
                     const href = a.getAttribute("href") || "";
                     if (href && href !== "#" && !href.startsWith("javascript:")) {
-                        allSeen.push(href.split("?")[0].split("#")[0]);
+                        try {
+                            const url = new URL(href, "https://www.facebook.com");
+                            if (url.pathname === "/profile.php" && url.searchParams.has("id")) {
+                                allSeen.push(url.pathname + "?id=" + url.searchParams.get("id"));
+                            } else {
+                                allSeen.push(url.origin + url.pathname);
+                            }
+                        } catch (e) {
+                            allSeen.push(href.split("?")[0].split("#")[0]);
+                        }
                     }
                 }
             }

@@ -442,7 +442,24 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
                     const a = node.querySelector('a[href]');
                     if (a) {
                         const href = a.getAttribute("href") || "";
-                        if (href) return href.split("?")[0].split("#")[0];
+                        if (href) {
+                            // Older-style profile links (profile.php?id=NNNN)
+                            // carry the identifying part in the QUERY STRING —
+                            // naively stripping "?..." collapses every such
+                            // person into the same generic "profile.php"
+                            // identifier, wrongly treating them as one person.
+                            // Confirmed live (2026-07-03): this caused one real
+                            // candidate to be silently skipped as "duplicate".
+                            try {
+                                const url = new URL(href, "https://www.facebook.com");
+                                if (url.pathname === "/profile.php" && url.searchParams.has("id")) {
+                                    return url.pathname + "?id=" + url.searchParams.get("id");
+                                }
+                                return url.origin + url.pathname;
+                            } catch (e) {
+                                return href.split("?")[0].split("#")[0];
+                            }
+                        }
                     }
                     node = node.parentElement;
                 }
@@ -514,7 +531,17 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
                             const a = node.querySelector("a[href]");
                             if (a) {
                                 const href = a.getAttribute("href") || "";
-                                if (href) return href.split("?")[0].split("#")[0];
+                                if (href) {
+                                    try {
+                                        const url = new URL(href, "https://www.facebook.com");
+                                        if (url.pathname === "/profile.php" && url.searchParams.has("id")) {
+                                            return url.pathname + "?id=" + url.searchParams.get("id");
+                                        }
+                                        return url.origin + url.pathname;
+                                    } catch (e) {
+                                        return href.split("?")[0].split("#")[0];
+                                    }
+                                }
                             }
                             node = node.parentElement;
                         }
