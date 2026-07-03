@@ -664,36 +664,53 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
         // Wait for Facebook to lazy-load new rows
         await new Promise((r) => setTimeout(r, SCROLL_DELAY));
 
-        // Early exit: we are at the true bottom AND the scroll height didn't grow
-        // after the delay (no new rows were injected), AND we found no buttons.
-        // This avoids burning through the remaining 50-scroll streak unnecessarily.
-        if (scrollResult.atBottom && buttonsFound.uninvitedCount === 0) {
-            const heightAfter = await page.evaluate(() => {
-                const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter(d => {
-                    const s = window.getComputedStyle(d);
-                    return s.display !== "none" && s.visibility !== "hidden";
-                });
-                for (const dialog of open) {
-                    const scrollables = Array.from(dialog.querySelectorAll("*"))
-                        .filter(el => {
-                            const s = window.getComputedStyle(el);
-                            return s.overflowY === "scroll" || s.overflowY === "auto" ||
-                                   el.scrollHeight > el.clientHeight + 10;
-                        })
-                        .sort((a, b) => b.scrollHeight - a.scrollHeight);
-                    if (scrollables.length > 0) return scrollables[0].scrollHeight;
-                }
-                return 0;
+        const getScrollHeight = () => page.evaluate(() => {
+            const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter(d => {
+                const s = window.getComputedStyle(d);
+                return s.display !== "none" && s.visibility !== "hidden";
             });
-
-            if (heightAfter <= scrollResult.scrollHeight) {
-                logger.info(
-                    "End of list confirmed: at scroll bottom, no new rows loaded, no pending buttons. Done.",
-                );
-                break;
+            for (const dialog of open) {
+                const scrollables = Array.from(dialog.querySelectorAll("*"))
+                    .filter(el => {
+                        const s = window.getComputedStyle(el);
+                        return s.overflowY === "scroll" || s.overflowY === "auto" ||
+                               el.scrollHeight > el.clientHeight + 10;
+                    })
+                    .sort((a, b) => b.scrollHeight - a.scrollHeight);
+                if (scrollables.length > 0) return scrollables[0].scrollHeight;
             }
-            // Height grew → new rows were added, keep going
-            logger.info(`New rows loaded after scroll (${scrollResult.scrollHeight} → ${heightAfter}px). Continuing.`);
+            return 0;
+        });
+
+        // Early exit: we are at the true bottom AND the scroll height didn't grow,
+        // AND we found no buttons. A SINGLE no-growth check isn't reliable —
+        // confirmed live (2026-07-03) that this list can pause for several
+        // seconds mid-load before continuing, and a single quick recheck
+        // wrongly declared "end of list" after seeing only ~8% of a post's
+        // real reactors. Be patient: retry several times with growing waits
+        // before concluding we've truly reached the end.
+        if (scrollResult.atBottom && buttonsFound.uninvitedCount === 0) {
+            let stillStalled = true;
+            const retryDelaysMs = [1000, 2000, 3000, 4000, 5000];
+            for (const delay of retryDelaysMs) {
+                const heightAfter = await getScrollHeight();
+                if (heightAfter > scrollResult.scrollHeight) {
+                    logger.info(`New rows loaded after scroll (${scrollResult.scrollHeight} → ${heightAfter}px). Continuing.`);
+                    stillStalled = false;
+                    break;
+                }
+                await new Promise((r) => setTimeout(r, delay));
+            }
+            if (stillStalled) {
+                const finalHeight = await getScrollHeight();
+                if (finalHeight <= scrollResult.scrollHeight) {
+                    logger.info(
+                        `End of list confirmed: at scroll bottom, no new rows loaded through ${retryDelaysMs.length} patience retries, no pending buttons. Done.`,
+                    );
+                    break;
+                }
+                logger.info(`New rows loaded after scroll (${scrollResult.scrollHeight} → ${finalHeight}px). Continuing.`);
+            }
         }
     }
 

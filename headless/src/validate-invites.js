@@ -163,17 +163,31 @@ async function main() {
         });
 
         // Wait for Facebook's lazy loader, THEN check whether scrollHeight
-        // actually grew — this is the only reliable "reached the real end"
-        // signal (mirrors reactions.js's scrollAndInvite). Just being
-        // "atBottom" for a moment is not enough; the next batch may still
-        // be loading.
+        // actually grew. A single no-growth check isn't reliable — the
+        // user observed the list can pause/lag for several seconds before
+        // continuing to load more (confirmed live: an earlier run declared
+        // "end of list" at only 73 of ~891 real reactors). Be patient:
+        // retry several times with growing waits before concluding we've
+        // truly reached the end.
         await new Promise((r) => setTimeout(r, FAST_SCROLL_DELAY));
 
         if (scrollResult.atBottom) {
-            const heightAfter = await getScrollHeight();
-            if (heightAfter <= heightBefore) {
-                console.log(`Confirmed end of list at scroll #${totalScrolls} (height stopped growing at ${heightAfter}px).`);
-                break;
+            let stillStalled = true;
+            const retryDelaysMs = [1000, 2000, 3000, 4000, 5000];
+            for (const delay of retryDelaysMs) {
+                const heightAfter = await getScrollHeight();
+                if (heightAfter > heightBefore) {
+                    stillStalled = false;
+                    break;
+                }
+                await new Promise((r) => setTimeout(r, delay));
+            }
+            if (stillStalled) {
+                const finalHeight = await getScrollHeight();
+                if (finalHeight <= heightBefore) {
+                    console.log(`Confirmed end of list at scroll #${totalScrolls} (height stayed at ${finalHeight}px through ${retryDelaysMs.length} patience retries).`);
+                    break;
+                }
             }
         }
     }
