@@ -389,6 +389,18 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
     const MAX_SCROLLS_WITHOUT_NEW = 300;
     const SCROLL_DELAY = config.scrollDelayMs || 3000;
 
+    // Facebook's reactions list is virtualized — as you scroll, DOM nodes
+    // get RECYCLED and reused for different people (common in long React
+    // lists). Marking a button element with data-invited="true" isn't
+    // reliable dedup: if that exact node later gets reused for a
+    // different person, we'd see the stale attribute and wrongly skip a
+    // real candidate. Confirmed live (2026-07-03): a manual check found
+    // ~9 people still showing "Pozvat" after a run claimed the list was
+    // fully processed. Track invited people by a STABLE identifier (their
+    // profile link, extracted from the row) in a Set that lives in
+    // Node.js memory, not on the (possibly-recycled) DOM node itself.
+    const invitedPersonIds = new Set();
+
     const selectorStr = selectors.join(", ");
 
     // Text keywords used as fallback when aria-label selectors find nothing.
@@ -418,7 +430,26 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
         //      dialog overlay → replaced with `aria-disabled` check
         //   C) No fallback when aria-label hasn't been set yet by FB's JS →
         //      now also matches by visible text content
-        const buttonsFound = await page.evaluate((selStr, keywords) => {
+        const buttonsFound = await page.evaluate((selStr, keywords, alreadyInvited) => {
+            // Walk up from the button to find a nearby profile link — the
+            // most stable identifier for a person, since it survives DOM
+            // node recycling in Facebook's virtualized reactions list
+            // (unlike a data-invited attribute stuck to a node that could
+            // later be reused for someone else entirely).
+            function getPersonId(el) {
+                let node = el.parentElement;
+                for (let i = 0; i < 8 && node; i++) {
+                    const a = node.querySelector('a[href]');
+                    if (a) {
+                        const href = a.getAttribute("href") || "";
+                        if (href) return href.split("?")[0].split("#")[0];
+                    }
+                    node = node.parentElement;
+                }
+                return (node || el).textContent.trim().slice(0, 80);
+            }
+
+            const invitedSet = new Set(alreadyInvited);
             const roots = (function() {
                 const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter(d => {
                     const s = window.getComputedStyle(d);
@@ -435,8 +466,8 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
                 // Primary: aria-label CSS selectors
                 for (const el of root.querySelectorAll(selStr)) {
                     totalCount++;
-                    if (el.getAttribute("data-invited") === "true") continue;
                     if (el.getAttribute("aria-disabled") === "true") continue;
+                    if (invitedSet.has(getPersonId(el))) continue;
                     uninvitedCount++;
                     debugInfo.push(`aria:${el.getAttribute("aria-label")}`);
                 }
@@ -446,8 +477,8 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
                     for (const btn of root.querySelectorAll('[role="button"]')) {
                         const text = (btn.textContent || "").trim();
                         if (!keywords.includes(text)) continue;
-                        if (btn.getAttribute("data-invited") === "true") continue;
                         if (btn.getAttribute("aria-disabled") === "true") continue;
+                        if (invitedSet.has(getPersonId(btn))) continue;
                         totalCount++;
                         uninvitedCount++;
                         debugInfo.push(`text:${text}`);
@@ -456,7 +487,7 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
             }
 
             return { uninvitedCount, totalCount, debugInfo: debugInfo.slice(0, 5) };
-        }, selectorStr, TEXT_KEYWORDS);
+        }, selectorStr, TEXT_KEYWORDS, Array.from(invitedPersonIds));
 
         logger.info(
             `Scan: ${buttonsFound.uninvitedCount} clickable / ${buttonsFound.totalCount} total` +
@@ -470,8 +501,27 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
             const maxToClick = Math.min(buttonsFound.uninvitedCount, maxInvites - invitesSent);
 
             for (let i = 0; i < maxToClick; i++) {
-                // Highlight the next clickable button with an orange outline
-                const found = await page.evaluate((selStr, keywords) => {
+                // Highlight the next clickable button with an orange outline.
+                // Returns both a human-readable label AND the person's
+                // stable identifier so we can record it in invitedPersonIds
+                // (Node.js-side Set) after a successful click — NOT just a
+                // DOM attribute, which can survive on a recycled node and
+                // wrongly get attributed to a different person later.
+                const found = await page.evaluate((selStr, keywords, alreadyInvited) => {
+                    function getPersonId(el) {
+                        let node = el.parentElement;
+                        for (let i = 0; i < 8 && node; i++) {
+                            const a = node.querySelector("a[href]");
+                            if (a) {
+                                const href = a.getAttribute("href") || "";
+                                if (href) return href.split("?")[0].split("#")[0];
+                            }
+                            node = node.parentElement;
+                        }
+                        return (node || el).textContent.trim().slice(0, 80);
+                    }
+
+                    const invitedSet = new Set(alreadyInvited);
                     const roots = (function() {
                         const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter(d => {
                             const s = window.getComputedStyle(d);
@@ -483,37 +533,39 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
                     for (const root of roots) {
                         // Try aria-label selectors first
                         for (const el of root.querySelectorAll(selStr)) {
-                            if (el.getAttribute("data-invited") === "true") continue;
                             if (el.getAttribute("data-pending") === "true") continue;
                             if (el.getAttribute("aria-disabled") === "true") continue;
+                            const personId = getPersonId(el);
+                            if (invitedSet.has(personId)) continue;
 
                             el.setAttribute("data-pending", "true");
                             el.style.outline = "4px solid orange";
                             el.style.backgroundColor = "#fff3cd";
                             el.scrollIntoView({ behavior: "smooth", block: "center" });
-                            return `aria:${el.getAttribute("aria-label")}`;
+                            return { label: `aria:${el.getAttribute("aria-label")}`, personId };
                         }
 
                         // Fallback: text content
                         for (const btn of root.querySelectorAll('[role="button"]')) {
                             const text = (btn.textContent || "").trim();
                             if (!keywords.includes(text)) continue;
-                            if (btn.getAttribute("data-invited") === "true") continue;
                             if (btn.getAttribute("data-pending") === "true") continue;
                             if (btn.getAttribute("aria-disabled") === "true") continue;
+                            const personId = getPersonId(btn);
+                            if (invitedSet.has(personId)) continue;
 
                             btn.setAttribute("data-pending", "true");
                             btn.style.outline = "4px solid orange";
                             btn.style.backgroundColor = "#fff3cd";
                             btn.scrollIntoView({ behavior: "smooth", block: "center" });
-                            return `text:${text}`;
+                            return { label: `text:${text}`, personId };
                         }
                     }
                     return null;
-                }, selectorStr, TEXT_KEYWORDS);
+                }, selectorStr, TEXT_KEYWORDS, Array.from(invitedPersonIds));
 
                 if (!found) break;
-                logger.info(`Highlighted: ${found}`);
+                logger.info(`Highlighted: ${found.label}`);
 
                 // 1s preview so the button is visible before clicking
                 await new Promise((r) => setTimeout(r, 1000));
@@ -529,6 +581,8 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
                         } else {
                             el.style.backgroundColor = "#b8daff"; // blue = dry-run skipped
                         }
+                        // Attribute is kept as a fast in-viewport hint only —
+                        // invitedPersonIds (below) is the authoritative dedup.
                         el.setAttribute("data-invited", "true");
                         return true;
                     }
@@ -536,6 +590,7 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
                 }, dryRun);
 
                 if (clicked) {
+                    invitedPersonIds.add(found.personId);
                     clickedThisRound++;
                 } else {
                     logger.warn("Highlighted button vanished before it could be clicked.");
