@@ -59,10 +59,29 @@ async function main() {
     const remaining = new Set();
     const selectorStr = reactions.INVITE_SELECTORS.join(", ");
     let scrollsWithoutNew = 0;
-    const MAX_SCROLLS_WITHOUT_NEW = 400;
-    const FAST_SCROLL_DELAY = 350; // deliberately much shorter than production — this is validation-only, no clicks sent
+    let totalScrolls = 0;
+    const MAX_SCROLLS_WITHOUT_NEW = 500; // safety net only, not the primary exit signal
+    const FAST_SCROLL_DELAY = 600; // shorter than production, but long enough for FB's lazy loader to inject the next batch
+
+    const getScrollHeight = () => page.evaluate(() => {
+        const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter(d => {
+            const s = window.getComputedStyle(d);
+            return s.display !== "none" && s.visibility !== "hidden";
+        });
+        for (const dialog of open) {
+            const scrollables = Array.from(dialog.querySelectorAll("*"))
+                .filter(el => {
+                    const s = window.getComputedStyle(el);
+                    return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
+                })
+                .sort((a, b) => b.scrollHeight - a.scrollHeight);
+            if (scrollables.length > 0) return scrollables[0].scrollHeight;
+        }
+        return 0;
+    });
 
     while (scrollsWithoutNew < MAX_SCROLLS_WITHOUT_NEW) {
+        totalScrolls++;
         const found = await page.evaluate((selStr) => {
             function getPersonId(el) {
                 let node = el.parentElement;
@@ -97,6 +116,11 @@ async function main() {
         for (const id of found) remaining.add(id);
         scrollsWithoutNew = remaining.size === before ? scrollsWithoutNew + 1 : 0;
 
+        if (totalScrolls % 10 === 0) {
+            console.log(`... scroll #${totalScrolls}, ${remaining.size} found so far`);
+        }
+
+        const heightBefore = await getScrollHeight();
         const scrollResult = await page.evaluate(() => {
             const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter(d => {
                 const s = window.getComputedStyle(d);
@@ -110,18 +134,34 @@ async function main() {
                 if (scrollables.length === 0) continue;
                 scrollables.sort((a, b) => b.scrollHeight - a.scrollHeight);
                 const c = scrollables[0];
-                c.scrollBy(0, c.clientHeight * 0.6);
+                c.scrollBy(0, c.clientHeight * 0.5);
                 const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 20;
                 return { atBottom };
             }
             return { atBottom: true };
         });
 
+        // Wait for Facebook's lazy loader, THEN check whether scrollHeight
+        // actually grew — this is the only reliable "reached the real end"
+        // signal (mirrors reactions.js's scrollAndInvite). Just being
+        // "atBottom" for a moment is not enough; the next batch may still
+        // be loading.
         await new Promise((r) => setTimeout(r, FAST_SCROLL_DELAY));
 
-        if (scrollResult.atBottom && scrollsWithoutNew > 8) break;
+        if (scrollResult.atBottom) {
+            const heightAfter = await getScrollHeight();
+            if (heightAfter <= heightBefore) {
+                console.log(`Confirmed end of list at scroll #${totalScrolls} (height stopped growing at ${heightAfter}px).`);
+                break;
+            }
+        }
     }
 
+    if (scrollsWithoutNew >= MAX_SCROLLS_WITHOUT_NEW) {
+        console.log(`WARNING: hit the ${MAX_SCROLLS_WITHOUT_NEW}-scroll safety cap without confirming end of list — results below may be incomplete.`);
+    }
+
+    console.log(`Total scrolls performed: ${totalScrolls}`);
     console.log(`RESULT: ${remaining.size} distinct people still show an Invite/Pozvat button.`);
     if (remaining.size > 0) {
         console.log("Sample identifiers:", Array.from(remaining).slice(0, 15));
