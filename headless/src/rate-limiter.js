@@ -164,6 +164,7 @@ function releaseLock() {
 function resetDailyIfNeeded() {
     const state = loadState();
     const today = todayString();
+    let changed = false;
 
     if (state.date !== today) {
         logger.info(
@@ -171,11 +172,23 @@ function resetDailyIfNeeded() {
         );
         state.date = today;
         state.invitesToday = 0;
-        state.dailyLimit = config.dailyMax;
         state.lastInviteTimestamp = null;
         // Note: cooldown is NOT cleared — it's time-based, persists across days
-        saveState(state);
+        changed = true;
     }
+
+    // dailyLimit is a CONFIG value, not day-scoped state — re-sync it on every
+    // run regardless of whether it's a new day. Confirmed live (2026-07-04):
+    // DAILY_MAX_OVERRIDE was set after a run earlier the same day had already
+    // written dailyLimit=100 to disk; without this, that stale value would
+    // have silently overridden the new config until the next calendar day.
+    if (state.dailyLimit !== config.dailyMax) {
+        logger.info(`Daily limit changed (was ${state.dailyLimit}, now ${config.dailyMax}). Updating.`);
+        state.dailyLimit = config.dailyMax;
+        changed = true;
+    }
+
+    if (changed) saveState(state);
 
     return state;
 }
