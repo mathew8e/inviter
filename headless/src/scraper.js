@@ -403,6 +403,45 @@ async function extractVisiblePosts(page, alreadySeen, pageSlug) {
 // scrollToBottom — scroll to absolute bottom, detect if more content loaded
 // ──────────────────────────────────────────────
 
+/**
+ * Scrolls the Content Library table's own internal scroll container.
+ *
+ * Confirmed live (2026-07-04): document.body.scrollHeight stays flat at a
+ * fixed value (990px) no matter how much content loads — the table is
+ * rendered inside its OWN scrollable div (same pattern as the reactions
+ * dialog), and window.scrollTo()/document.body have no effect on it at
+ * all. Finds that container the same way findScrollableContainer() does
+ * for the reactions dialog: largest element with overflowY scroll/auto.
+ *
+ * @param {import('puppeteer').Page} page
+ * @returns {Promise<boolean>} true if new content was loaded (height grew)
+ */
+async function scrollContentLibraryTable(page) {
+    const getHeight = () => page.evaluate(() => {
+        const scrollables = Array.from(document.querySelectorAll("*")).filter(el => {
+            const s = window.getComputedStyle(el);
+            return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
+        }).sort((a, b) => b.scrollHeight - a.scrollHeight);
+        return scrollables.length > 0 ? scrollables[0].scrollHeight : document.body.scrollHeight;
+    });
+
+    const before = await getHeight();
+    await page.evaluate(() => {
+        const scrollables = Array.from(document.querySelectorAll("*")).filter(el => {
+            const s = window.getComputedStyle(el);
+            return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
+        }).sort((a, b) => b.scrollHeight - a.scrollHeight);
+        if (scrollables.length > 0) {
+            scrollables[0].scrollTop = scrollables[0].scrollHeight;
+        } else {
+            window.scrollTo(0, document.body.scrollHeight);
+        }
+    });
+    await new Promise((r) => setTimeout(r, 800));
+    const after = await getHeight();
+    return after > before;
+}
+
 async function scrollToBottom(page) {
     const before = await page.evaluate(() => document.body.scrollHeight);
     await page.evaluate(() => {
@@ -858,11 +897,26 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts,
 
     const posts = [];
     let scrollHeightUnchangedStreak = 0;
+    let totalScrolls = 0;
     const MAX_SCROLLS_WITHOUT_NEW = 500; // safety net only, not the primary exit signal
 
-    const getPageScrollHeight = () => page.evaluate(() => document.body.scrollHeight);
+    const getPageScrollHeight = () => page.evaluate(() => {
+        const scrollables = Array.from(document.querySelectorAll("*")).filter(el => {
+            const s = window.getComputedStyle(el);
+            return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
+        }).sort((a, b) => b.scrollHeight - a.scrollHeight);
+        return scrollables.length > 0 ? scrollables[0].scrollHeight : document.body.scrollHeight;
+    });
 
     while (posts.length < maxPosts && scrollHeightUnchangedStreak < MAX_SCROLLS_WITHOUT_NEW) {
+        totalScrolls++;
+        if (totalScrolls % 10 === 0) {
+            // A run scrolling deep into 3 years of history can go quiet for
+            // a while between new-post discoveries (most rows in a given
+            // batch are already-seen) — a periodic heartbeat makes it clear
+            // the run is still actively working, not stuck.
+            logger.info(`... still scrolling (scroll #${totalScrolls}, ${posts.length} new posts found so far)`);
+        }
         const rows = await extractContentLibraryRows(page);
 
         for (const row of rows) {
@@ -895,7 +949,7 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts,
         }
 
         const heightBefore = await getPageScrollHeight();
-        const grew = await scrollToBottom(page);
+        const grew = await scrollContentLibraryTable(page);
         await new Promise((r) => setTimeout(r, 2500));
 
         if (grew) {
@@ -952,6 +1006,7 @@ module.exports = {
     switchToMostRecent,
     extractVisiblePosts,
     scrollToBottom,
+    scrollContentLibraryTable,
     filterByDate,
     mergePostLists,
     extractDateString,
