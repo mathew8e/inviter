@@ -404,42 +404,36 @@ async function extractVisiblePosts(page, alreadySeen, pageSlug) {
 // ──────────────────────────────────────────────
 
 /**
- * Scrolls the Content Library table's own internal scroll container.
+ * Scrolls the Content Library table by dispatching real mouse-wheel events.
  *
- * Confirmed live (2026-07-04): document.body.scrollHeight stays flat at a
- * fixed value (990px) no matter how much content loads — the table is
- * rendered inside its OWN scrollable div (same pattern as the reactions
- * dialog), and window.scrollTo()/document.body have no effect on it at
- * all. Finds that container the same way findScrollableContainer() does
- * for the reactions dialog: largest element with overflowY scroll/auto.
+ * Confirmed live (2026-07-04): document.body.scrollHeight (and every other
+ * element's scrollHeight) stays essentially flat no matter how much content
+ * loads — this table is NOT a CSS overflow:scroll container at all. Setting
+ * .scrollTop on any element (including the largest-scrollHeight candidate)
+ * has zero effect. It's one of Facebook's Comet virtualized lists that
+ * listens for wheel events directly and fetches more rows via its own
+ * internal offset — confirmed by dispatching page.mouse.wheel() at the
+ * table and watching the row count grow (took ~11 ticks / ~5.5s before the
+ * first batch of new rows appeared).
  *
  * @param {import('puppeteer').Page} page
- * @returns {Promise<boolean>} true if new content was loaded (height grew)
+ * @returns {Promise<boolean>} true if new rows loaded
  */
 async function scrollContentLibraryTable(page) {
-    const getHeight = () => page.evaluate(() => {
-        const scrollables = Array.from(document.querySelectorAll("*")).filter(el => {
-            const s = window.getComputedStyle(el);
-            return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
-        }).sort((a, b) => b.scrollHeight - a.scrollHeight);
-        return scrollables.length > 0 ? scrollables[0].scrollHeight : document.body.scrollHeight;
-    });
+    const countRows = () => page.evaluate(() =>
+        document.querySelectorAll('a[href*="content_id"], a[href*="/insights/"]').length,
+    );
 
-    const before = await getHeight();
-    await page.evaluate(() => {
-        const scrollables = Array.from(document.querySelectorAll("*")).filter(el => {
-            const s = window.getComputedStyle(el);
-            return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
-        }).sort((a, b) => b.scrollHeight - a.scrollHeight);
-        if (scrollables.length > 0) {
-            scrollables[0].scrollTop = scrollables[0].scrollHeight;
-        } else {
-            window.scrollTo(0, document.body.scrollHeight);
-        }
-    });
-    await new Promise((r) => setTimeout(r, 800));
-    const after = await getHeight();
-    return after > before;
+    const before = await countRows();
+    await page.mouse.move(640, 500);
+
+    const MAX_TICKS = 30; // ~15s worst case — matches the reactions-dialog patience budget
+    for (let i = 0; i < MAX_TICKS; i++) {
+        await page.mouse.wheel({ deltaY: 1500 });
+        await new Promise((r) => setTimeout(r, 500));
+        if ((await countRows()) > before) return true;
+    }
+    return false;
 }
 
 async function scrollToBottom(page) {
@@ -896,19 +890,14 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts,
     }
 
     const posts = [];
-    let scrollHeightUnchangedStreak = 0;
+    let stallStreak = 0;
     let totalScrolls = 0;
-    const MAX_SCROLLS_WITHOUT_NEW = 500; // safety net only, not the primary exit signal
+    // scrollContentLibraryTable() already retries internally for ~15s before
+    // reporting no-growth, so a small outer streak is plenty of extra margin
+    // (5 consecutive full stalls = ~75s of confirmed no growth = genuinely done).
+    const MAX_STALL_STREAK = 5;
 
-    const getPageScrollHeight = () => page.evaluate(() => {
-        const scrollables = Array.from(document.querySelectorAll("*")).filter(el => {
-            const s = window.getComputedStyle(el);
-            return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
-        }).sort((a, b) => b.scrollHeight - a.scrollHeight);
-        return scrollables.length > 0 ? scrollables[0].scrollHeight : document.body.scrollHeight;
-    });
-
-    while (posts.length < maxPosts && scrollHeightUnchangedStreak < MAX_SCROLLS_WITHOUT_NEW) {
+    while (posts.length < maxPosts && stallStreak < MAX_STALL_STREAK) {
         totalScrolls++;
         if (totalScrolls % 10 === 0) {
             // A run scrolling deep into 3 years of history can go quiet for
@@ -948,30 +937,8 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts,
             if (posts.length >= maxPosts) break;
         }
 
-        const heightBefore = await getPageScrollHeight();
         const grew = await scrollContentLibraryTable(page);
-        await new Promise((r) => setTimeout(r, 2500));
-
-        if (grew) {
-            scrollHeightUnchangedStreak = 0;
-            continue;
-        }
-
-        // Be patient before concluding we've reached the end — confirmed
-        // live (2026-07-03) that a reactions list can pause for many
-        // seconds mid-load without genuinely being finished; the same
-        // applies here. Retry several times with growing waits.
-        let stillStalled = true;
-        const retryDelaysMs = [1000, 2000, 3000, 4000, 5000];
-        for (const delay of retryDelaysMs) {
-            const heightAfter = await getPageScrollHeight();
-            if (heightAfter > heightBefore) {
-                stillStalled = false;
-                break;
-            }
-            await new Promise((r) => setTimeout(r, delay));
-        }
-        scrollHeightUnchangedStreak = stillStalled ? scrollHeightUnchangedStreak + 1 : 0;
+        stallStreak = grew ? 0 : stallStreak + 1;
     }
 
     logger.info(`Discovered ${posts.length} posts total from Content Library.`);
