@@ -66,6 +66,20 @@ function getWarningsAndErrors(lines) {
     return lines.filter((l) => /\bwarn:|\berror:/i.test(l));
 }
 
+/**
+ * The date range the program actually scans on each run: from `yearsBack`
+ * years ago through today. Not stored anywhere — computed the same way
+ * scraper.setContentLibraryDateRange() derives it, so the dashboard always
+ * reflects the real current window even as "today" moves forward.
+ */
+function getDiscoveryRange() {
+    const to = new Date();
+    const from = new Date(to);
+    from.setFullYear(from.getFullYear() - config.yearsBack);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    return { from: fmt(from), to: fmt(to), yearsBack: config.yearsBack };
+}
+
 function gatherData() {
     const postList = scraper.loadPostList();
     const allPosts = postList.posts || [];
@@ -118,6 +132,7 @@ function gatherData() {
         warningsAndErrors,
         scrapedAt: postList.scrapedAt,
         generatedAt: Date.now(),
+        discoveryRange: getDiscoveryRange(),
     };
 }
 
@@ -133,13 +148,25 @@ function esc(s) {
 
 function fmtTime(ts) {
     if (!ts) return "—";
-    return new Date(ts).toLocaleString();
+    return new Date(ts).toLocaleString("cs-CZ");
 }
+
+function fmtDate(isoDate) {
+    if (!isoDate) return "—";
+    return new Date(isoDate + "T00:00:00").toLocaleDateString("cs-CZ");
+}
+
+const STATUS_LABELS_CZ = { done: "hotovo", pending: "čeká", error: "chyba" };
 
 function statusBadge(status) {
     const colors = { done: "#2e7d32", pending: "#e6a700", error: "#c62828" };
     const color = colors[status] || "#666";
-    return `<span style="background:${color};color:#fff;padding:2px 8px;border-radius:10px;font-size:12px;">${esc(status)}</span>`;
+    const label = STATUS_LABELS_CZ[status] || status;
+    return `<span style="background:${color};color:#fff;padding:2px 8px;border-radius:10px;font-size:12px;">${esc(label)}</span>`;
+}
+
+function contentTypeLabel(contentType) {
+    return contentType === "story" ? "Story" : "Příspěvek";
 }
 
 function renderPage(data) {
@@ -149,11 +176,11 @@ function renderPage(data) {
     );
 
     return `<!DOCTYPE html>
-<html lang="en">
+<html lang="cs">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="refresh" content="20">
-<title>Inviter Dashboard</title>
+<title>Inviter — Přehled</title>
 <style>
   body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #f4f5f7; color: #1c1c1c; margin: 0; padding: 24px; }
   h1 { font-size: 20px; margin-bottom: 4px; }
@@ -179,62 +206,67 @@ function renderPage(data) {
 </style>
 </head>
 <body>
-  <h1>Inviter Dashboard</h1>
-  <div class="sub">Read-only status view. Auto-refreshes every 20s. Generated ${esc(fmtTime(data.generatedAt))}</div>
+  <h1>Inviter — Přehled</h1>
+  <div class="sub">Pouze pro čtení. Automatická aktualizace každých 20 s. Vygenerováno ${esc(fmtTime(data.generatedAt))}</div>
 
   <div class="cards">
     <div class="card">
-      <div class="label">Run status</div>
-      <div class="value">${data.runActive ? '<span class="badge-running">RUNNING</span>' : '<span class="badge-idle">idle</span>'}</div>
+      <div class="label">Stav běhu</div>
+      <div class="value">${data.runActive ? '<span class="badge-running">BĚŽÍ</span>' : '<span class="badge-idle">nečinný</span>'}</div>
     </div>
     <div class="card">
-      <div class="label">Today's budget</div>
+      <div class="label">Sledované období</div>
+      <div class="value" style="font-size:16px;">${esc(fmtDate(data.discoveryRange.from))} – ${esc(fmtDate(data.discoveryRange.to))}</div>
+      <div class="sub" style="margin:4px 0 0;">posledních ${data.discoveryRange.yearsBack} ${data.discoveryRange.yearsBack === 1 ? "rok" : data.discoveryRange.yearsBack < 5 ? "roky" : "let"}</div>
+    </div>
+    <div class="card">
+      <div class="label">Dnešní limit pozvánek</div>
       <div class="value">${data.rateState.invitesToday} / ${data.rateState.dailyLimit}</div>
       <div class="bar-bg"><div class="bar-fill" style="width:${budgetPct}%"></div></div>
     </div>
     <div class="card">
-      <div class="label">Posts pending</div>
+      <div class="label">Čekající příspěvky</div>
       <div class="value">${data.postsByStatus.pending || 0}</div>
     </div>
     <div class="card">
-      <div class="label">Posts done</div>
+      <div class="label">Dokončené příspěvky</div>
       <div class="value">${data.postsByStatus.done || 0}</div>
     </div>
     <div class="card">
-      <div class="label">Total invited (all time)</div>
+      <div class="label">Celkem pozváno (od začátku)</div>
       <div class="value">${data.totalInvitedAllTime}</div>
     </div>
   </div>
 
-  ${data.rateState.isCooldown ? `<div class="cooldown">⚠️ In cooldown until ${esc(fmtTime(data.rateState.cooldownUntil))} — consecutive errors: ${data.rateState.consecutiveErrors}</div>` : ""}
+  ${data.rateState.isCooldown ? `<div class="cooldown">⚠️ Ochranná pauza do ${esc(fmtTime(data.rateState.cooldownUntil))} — chyby po sobě: ${data.rateState.consecutiveErrors}</div>` : ""}
 
   <section>
-    <h2>Posts (${data.totalPosts} shown — ${data.storyCount} Story reposts hidden, no reactions dialog)</h2>
-    ${data.postRows.length === 0 ? '<div class="empty">No posts discovered yet.</div>' : `
+    <h2>Příspěvky (zobrazeno ${data.totalPosts} — ${data.storyCount} Story repostů skryto, nemají dialog reakcí)</h2>
+    ${data.postRows.length === 0 ? '<div class="empty">Zatím nebyly nalezeny žádné příspěvky.</div>' : `
     <table>
-      <tr><th></th><th>Date</th><th>Type</th><th>Status</th><th>Total invited</th><th>Runs</th><th>Link</th></tr>
+      <tr><th></th><th>Datum</th><th>Typ</th><th>Stav</th><th>Pozváno celkem</th><th>Běhy</th><th>Odkaz</th></tr>
       ${data.postRows.map((p) => `
       <tr>
         <td>${p.runs.length > 0 ? `<button onclick="this.closest('tr').nextElementSibling.style.display = this.closest('tr').nextElementSibling.style.display === 'none' ? '' : 'none';" style="cursor:pointer;border:none;background:none;font-size:14px;">▸</button>` : ""}</td>
         <td>${esc(p.date)}</td>
-        <td>${esc(p.contentType || "post")}</td>
+        <td>${esc(contentTypeLabel(p.contentType))}</td>
         <td>${statusBadge(p.status)}</td>
         <td>${p.totalInvited}</td>
         <td>${p.runs.length}</td>
-        <td>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">View</a>` : "—"}</td>
+        <td>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">Zobrazit</a>` : "—"}</td>
       </tr>
       <tr style="display:none;">
         <td></td>
         <td colspan="6">
-          ${p.runs.length === 0 ? '<span class="empty">No runs recorded yet for this post.</span>' : `
+          ${p.runs.length === 0 ? '<span class="empty">Pro tento příspěvek zatím nejsou zaznamenány žádné běhy.</span>' : `
           <table>
-            <tr><th>When</th><th>Invited</th><th>Rate mode</th><th>Dry run</th><th>Stopped reason</th></tr>
+            <tr><th>Kdy</th><th>Pozváno</th><th>Režim</th><th>Zkušební běh</th><th>Důvod ukončení</th></tr>
             ${p.runs.map((r) => `
             <tr>
               <td>${esc(fmtTime(r.ts))}</td>
               <td>${r.invitedCount || 0}</td>
               <td>${esc(r.rateMode || "—")}</td>
-              <td>${r.dryRun ? "yes" : "no"}</td>
+              <td>${r.dryRun ? "ano" : "ne"}</td>
               <td>${esc(r.stoppedReason || "—")}</td>
             </tr>`).join("")}
           </table>`}
@@ -244,14 +276,14 @@ function renderPage(data) {
   </section>
 
   <section>
-    <h2>Recent warnings / errors</h2>
-    ${data.warningsAndErrors.length === 0 ? '<div class="empty">None in the most recent log file.</div>' :
+    <h2>Nedávná varování / chyby</h2>
+    ${data.warningsAndErrors.length === 0 ? '<div class="empty">V posledním logu žádné nejsou.</div>' :
       data.warningsAndErrors.map((l) => `<div class="warn-line">${esc(l)}</div>`).join("")}
   </section>
 
   <section>
-    <h2>Live log <span id="live-status" style="font-weight:normal;color:#999;font-size:12px;"></span></h2>
-    <pre id="live-log" style="background:#1c1c1c;color:#d4d4d4;padding:12px;border-radius:6px;max-height:400px;overflow-y:auto;font-size:12px;line-height:1.5;margin:0;white-space:pre-wrap;word-break:break-all;">(waiting for log data…)</pre>
+    <h2>Živý log <span id="live-status" style="font-weight:normal;color:#999;font-size:12px;"></span></h2>
+    <pre id="live-log" style="background:#1c1c1c;color:#d4d4d4;padding:12px;border-radius:6px;max-height:400px;overflow-y:auto;font-size:12px;line-height:1.5;margin:0;white-space:pre-wrap;word-break:break-all;">(čekání na data logu…)</pre>
   </section>
 
   <script>
@@ -265,11 +297,11 @@ function renderPage(data) {
         const res = await fetch("/api/logs");
         const data = await res.json();
         const wasAtBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
-        logEl.textContent = data.lines.length ? data.lines.join("\\n") : "(no log output yet)";
+        logEl.textContent = data.lines.length ? data.lines.join("\\n") : "(zatím žádný výstup)";
         if (wasAtBottom) logEl.scrollTop = logEl.scrollHeight;
-        statusEl.textContent = "updated " + new Date().toLocaleTimeString();
+        statusEl.textContent = "aktualizováno " + new Date().toLocaleTimeString("cs-CZ");
       } catch (err) {
-        statusEl.textContent = "log fetch failed";
+        statusEl.textContent = "načtení logu selhalo";
       }
     }
     pollLog();
