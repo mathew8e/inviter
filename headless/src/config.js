@@ -92,6 +92,12 @@ const config = Object.freeze({
     // project policy, not just a discovery filter (see PLAN.md §7).
     yearsBack: parseInt(process.env.YEARS_BACK || "3", 10),
 
+    // Wall-clock cap (ms) on the Content Library discovery/scroll phase per
+    // run — independent of runTimeCapMs, which only bounds the invite
+    // phase. Keeps a single cron invocation bounded even as the "already
+    // seen" backlog grows over the multi-day 3-year catch-up.
+    discoveryTimeCapMs: parseInt(process.env.DISCOVERY_TIME_CAP_MS || "600000", 10),
+
     // ── Paths ──
     projectRoot: PROJECT_ROOT,
     dataDir: DATA_DIR,

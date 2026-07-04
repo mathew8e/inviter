@@ -868,9 +868,16 @@ async function extractContentLibraryRows(page) {
  * @param {number} [yearsBack=3] — how far back the Content Library's own
  *        date-range filter should reach. Anything older is out of scope
  *        entirely per project policy — see PLAN.md §7.
+ * @param {number} [maxDiscoveryTimeMs=600000] — wall-clock cap on how long
+ *        this scan can run. Each cron run has to re-scroll past every
+ *        already-seen row before reaching new ones at the frontier, so as
+ *        the 3-year backlog is worked through this naturally gets slower —
+ *        this cap guarantees a single cron invocation can't run unboundedly
+ *        long. Whatever's found so far is returned; the rest is picked up
+ *        by tomorrow's run (same multi-day catch-up as the invite phase).
  * @returns {Promise<Post[]>}
  */
-async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts, yearsBack = 3) {
+async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts, yearsBack = 3, maxDiscoveryTimeMs = 600000) {
     const existing = loadPostList();
     const alreadySeen = new Set(existing.posts.map((p) => p.url).filter(Boolean));
 
@@ -892,12 +899,20 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts,
     const posts = [];
     let stallStreak = 0;
     let totalScrolls = 0;
+    const discoveryStart = Date.now();
     // scrollContentLibraryTable() already retries internally for ~15s before
     // reporting no-growth, so a small outer streak is plenty of extra margin
     // (5 consecutive full stalls = ~75s of confirmed no growth = genuinely done).
     const MAX_STALL_STREAK = 5;
 
     while (posts.length < maxPosts && stallStreak < MAX_STALL_STREAK) {
+        if (Date.now() - discoveryStart > maxDiscoveryTimeMs) {
+            logger.warn(
+                `Discovery time cap (${maxDiscoveryTimeMs}ms) reached with ${posts.length} new posts found — ` +
+                "stopping here; the rest will be picked up by a future run.",
+            );
+            break;
+        }
         totalScrolls++;
         if (totalScrolls % 10 === 0) {
             // A run scrolling deep into 3 years of history can go quiet for

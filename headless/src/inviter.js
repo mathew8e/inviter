@@ -233,7 +233,7 @@ async function runPageWorkflow(page, opts) {
     // reactions-dialog open). Navigates there directly; no need to visit
     // the public page URL first.
     const discovered = await scraper.discoverPostsFromContentLibrary(
-        page, dateFrom, dateTo, maxPosts, yearsBack ?? config.yearsBack,
+        page, dateFrom, dateTo, maxPosts, yearsBack ?? config.yearsBack, config.discoveryTimeCapMs,
     );
     summary.postsDiscovered = discovered.length;
 
