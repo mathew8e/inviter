@@ -237,9 +237,26 @@ async function runPageWorkflow(page, opts) {
     );
     summary.postsDiscovered = discovered.length;
 
-    // Skip posts already marked "done" in a previous run
-    const pending = discovered.filter((p) => p.status !== "done");
-    logger.info(`${pending.length}/${discovered.length} discovered posts are pending (not yet done).`);
+    // discoverPostsFromContentLibrary() only returns rows NEWLY found THIS
+    // call — anything already in posts.json is skipped there to avoid
+    // re-scraping the same rows every run. That means a post discovered in
+    // an EARLIER run that never got processed (still "pending" after
+    // hitting the daily budget or run-time cap) would never appear in
+    // `discovered` again, since its URL is already in that function's
+    // "already seen" set — it would be silently orphaned forever. Confirmed
+    // live (2026-07-04): a run that discovered 60 posts and only processed
+    // 1 before hitting its cap did NOT retry the other 59 pending posts on
+    // the next run — it just found a fresh batch further back in time.
+    // Pull the FULL accumulated list instead of just this run's new batch,
+    // so nothing already-pending is ever left behind.
+    const allKnownPosts = scraper.loadPostList().posts;
+    const pending = allKnownPosts
+        .filter((p) => p.status !== "done")
+        .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    logger.info(
+        `${pending.length}/${allKnownPosts.length} known posts are pending (not yet done) — ` +
+        `${discovered.length} newly discovered this run.`,
+    );
 
     if (pending.length === 0) {
         summary.stoppedReason = "no_pending_posts";
