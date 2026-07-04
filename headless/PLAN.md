@@ -343,6 +343,30 @@ click delay, 15s vs 30s between posts, 30 vs 20 minute run cap, 250 vs 100 daily
 rate-limit detection ever fires (`enterCooldown`, logged prominently, run exits), drop back to
 `paranoid` by editing the crontab line (`crontab -e`) — no code change needed, `--rate-mode` is a CLI flag.
 
+### 6.1 Daily/Per-Post Volume Overrides — `DAILY_MAX_OVERRIDE` / `PER_POST_MAX_OVERRIDE`
+
+Also added 2026-07-04, same day, after the page owner (Daniel Kůs) reviewed the first live run and gave
+direct feedback via chat: *"limit 100 je moc nizky... bezne posilam 500 a mam vyzkouseno ze nevadi ani
+tech 1400"* (100/day is too low; he routinely sends 500/day manually and has tested 1,400/day without
+issue on this exact account). That's real, account-specific tolerance data — strictly better than the
+generic paranoid/moderate/aggressive presets, which were conservative guesses made with zero account
+history to go on.
+
+Rather than jump to `aggressive` mode (which would also speed up click/scroll *pacing* — timing that's
+been carefully tuned for accuracy against Facebook's DOM update speed, and isn't what was actually being
+complained about), `config.js` now supports overriding just the volume caps on top of whichever mode is
+selected:
+
+```javascript
+if (process.env.DAILY_MAX_OVERRIDE) rateMode.dailyMax = parseInt(process.env.DAILY_MAX_OVERRIDE, 10);
+if (process.env.PER_POST_MAX_OVERRIDE) rateMode.perPostMax = parseInt(process.env.PER_POST_MAX_OVERRIDE, 10);
+```
+
+**Currently deployed:** `moderate` mode's pacing (3s click delay, 15s post cooldown, 30 min run cap)
+with `DAILY_MAX_OVERRIDE=800` and `PER_POST_MAX_OVERRIDE=240` (same 10:3 ratio as the built-in presets),
+set inline on the crontab line — comfortably under the owner's tested 1,400/day ceiling, above his
+routine 500/day, with margin held back deliberately rather than run right at the tested limit.
+
 ---
 
 ## 7. Post Date Range Strategy — Content Library & `yearsBack`
@@ -419,14 +443,15 @@ is processed; the rest is picked up by a future run — this is expected and fin
 
 ## 8. Scheduled Execution (Cron) — LIVE
 
-### 8.1 The Actual Crontab Entry (installed 2026-07-04, rate mode updated to `moderate` same day)
+### 8.1 The Actual Crontab Entry (installed 2026-07-04, updated same day — see §6/§6.1)
 
 ```
-0 9 * * * cd /home/mathew/inviter/headless && PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium /usr/bin/node src/index.js --page "https://www.facebook.com/DanielKusPlzen" --profile-dir ./profile --no-dry-run --max-posts 60 --years-back 3 --rate-mode moderate >> logs/run-$(date +\%Y-\%m-\%d).log 2>&1
+0 9 * * * cd /home/mathew/inviter/headless && PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium DAILY_MAX_OVERRIDE=800 PER_POST_MAX_OVERRIDE=240 /usr/bin/node src/index.js --page "https://www.facebook.com/DanielKusPlzen" --profile-dir ./profile --no-dry-run --max-posts 60 --years-back 3 --rate-mode moderate >> logs/run-$(date +\%Y-\%m-\%d).log 2>&1
 ```
 
 Runs daily at 09:00 on the Pi. Verified `cron` service is `active` via `systemctl is-active cron`.
-See §6 for why `--rate-mode` was bumped from `paranoid` to `moderate` on the same day cron was installed.
+See §6 for why `--rate-mode` was bumped from `paranoid` to `moderate`, and §6.1 for why
+`DAILY_MAX_OVERRIDE`/`PER_POST_MAX_OVERRIDE` were added on top of it the same day.
 
 ### 8.2 Why `PUPPETEER_EXECUTABLE_PATH` Is Set Inline
 
@@ -542,6 +567,7 @@ Screenshots on error/failed-click are saved to `data/screenshots/` for post-mort
 | **Content Library discovery stuck at exactly 10 posts** | The table is not a CSS overflow-scroll container at all — every element's `scrollHeight` stays flat; `.scrollTop` assignment has zero effect (Comet virtualized list, wheel-event-driven) | Dispatch real `page.mouse.wheel()` events; use row-count growth as the signal instead of `scrollHeight` |
 | Discovery phase had no time bound | Only the invite-processing phase (`runTimeCapMs`) was time-capped; a slow/stuck discovery scroll could in principle run forever | Added `config.discoveryTimeCapMs` (default 10 min), enforced inside `discoverPostsFromContentLibrary`'s loop |
 | `.env` silently ignored | No `dotenv.config()` call anywhere in the codebase | Every variable that matters is set inline on the launching command/cron line instead (§8.2) |
+| Run appeared "frozen" for 15 min (not an actual bug) | A post with thousands of reactors, mostly already following, produces long genuine stretches of zero new invites — the dashboard's invited-count only moves on an actual invite, so it looked stuck even though the scroll loop was actively working | Added a periodic heartbeat log (every 20 iterations) in `scrollAndInvite()` reporting invited-so-far and scans-since-last-invite, so long quiet stretches are visibly reported as progress |
 
 ---
 
