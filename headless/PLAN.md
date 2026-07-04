@@ -281,10 +281,23 @@ answer "what has the program done."
   computes `totalInvited` by summing history (not trusting a snapshot field)
 - One table, one row per post, with expandable nested run-history rows — replaced an earlier, more
   confusing "recent posts" + "recent invite history" two-table layout
+- A **"Sledované období"** (scanning period) card shows the actual date range being scanned — computed
+  live from `config.yearsBack` (today back N years), the same way `setContentLibraryDateRange()`
+  derives it, so it's never stale even though it isn't stored anywhere
 - Live log panel polls `GET /api/logs` (reads `logs/latest.log`) every 3s
+- **UI is in Czech** — this is what the page's actual stakeholders (the politician's team) read; labels,
+  statuses, table headers, and the live-log panel text are all translated (`lang="cs"`)
 - `node src/dashboard.js` (port 8787 by default, `DASHBOARD_PORT` env var to override)
 - **Must be launched with `nohup ... & disown`** (or an equivalent detaching mechanism) when started
   over SSH — a plain foreground command dies the moment the SSH session ends
+- **Remote access without port forwarding:** exposed publicly via **Tailscale Funnel** at
+  `https://inviter-pi.tail000e48.ts.net` — a stable HTTPS URL that doesn't change across restarts/reboots
+  (unlike `ngrok`/`localtunnel`, whose free-tier URLs are random and ephemeral, and whose tunnels were
+  seen to silently drop and need manual restarting). Set up via `sudo tailscale up` (one-time device
+  auth) then `sudo tailscale funnel --bg 8787` (persists in `tailscaled`'s own config — no foreground
+  process to keep alive, survives reboots since `tailscaled` is a systemd service). The dashboard has no
+  login, so this URL is effectively public to anyone who has it — acceptable for sharing with the
+  client, but worth remembering if that changes.
 
 ### 5.10 `src/validate-invites.js` — Fast Read-Only Validator
 
@@ -302,7 +315,7 @@ supported for local visual debugging.
 
 Unchanged:
 
-| Setting | 🔒 Paranoid (default, in use) | ⚖️ Moderate | ⚡ Aggressive |
+| Setting | 🔒 Paranoid | ⚖️ Moderate (default, in use) | ⚡ Aggressive |
 |---------|----------------------|-------------|---------------|
 | **Daily max** | 100 | 250 | 500 |
 | **Per post max** | 30 | 75 | 150 |
@@ -318,9 +331,17 @@ Unchanged:
 `runTimeCapMs` and the daily budget independently bound how much real inviting happens per run,
 regardless of how many posts discovery turns up.
 
-**In production:** `paranoid` mode, confirmed hitting its 30-invite-per-post cap correctly on a post
-with 37 eligible reactors (30 invited, 8 correctly left pending for the next run) — this is expected,
+**In production:** started in `paranoid` mode; confirmed hitting its 30-invite-per-post cap correctly
+on a post with 37 eligible reactors (30 invited, 8 correctly left pending for the next run) — expected,
 correct behavior, not a bug.
+
+**Switched to `moderate` on 2026-07-04** (same day cron was first installed) — the user found the daily
+runs too slow (one large post's reaction list ate the entire 20-minute paranoid run-time cap) and
+explicitly chose to trade some of the "run paranoid for 1–2 weeks first" caution for speed. Moderate is
+still a deliberately conservative preset (not `aggressive`), roughly doubling throughput: 3s vs 5s base
+click delay, 15s vs 30s between posts, 30 vs 20 minute run cap, 250 vs 100 daily invites. If Facebook's
+rate-limit detection ever fires (`enterCooldown`, logged prominently, run exits), drop back to
+`paranoid` by editing the crontab line (`crontab -e`) — no code change needed, `--rate-mode` is a CLI flag.
 
 ---
 
@@ -398,13 +419,14 @@ is processed; the rest is picked up by a future run — this is expected and fin
 
 ## 8. Scheduled Execution (Cron) — LIVE
 
-### 8.1 The Actual Crontab Entry (installed 2026-07-04)
+### 8.1 The Actual Crontab Entry (installed 2026-07-04, rate mode updated to `moderate` same day)
 
 ```
-0 9 * * * cd /home/mathew/inviter/headless && PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium /usr/bin/node src/index.js --page "https://www.facebook.com/DanielKusPlzen" --profile-dir ./profile --no-dry-run --max-posts 60 --years-back 3 --rate-mode paranoid >> logs/run-$(date +\%Y-\%m-\%d).log 2>&1
+0 9 * * * cd /home/mathew/inviter/headless && PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium /usr/bin/node src/index.js --page "https://www.facebook.com/DanielKusPlzen" --profile-dir ./profile --no-dry-run --max-posts 60 --years-back 3 --rate-mode moderate >> logs/run-$(date +\%Y-\%m-\%d).log 2>&1
 ```
 
 Runs daily at 09:00 on the Pi. Verified `cron` service is `active` via `systemctl is-active cron`.
+See §6 for why `--rate-mode` was bumped from `paranoid` to `moderate` on the same day cron was installed.
 
 ### 8.2 Why `PUPPETEER_EXECUTABLE_PATH` Is Set Inline
 
@@ -418,14 +440,14 @@ directly** — don't assume `.env` will pick it up.
 `--page` is likewise always passed explicitly on the command line — `config.fbPageUrl` (read from
 `FB_PAGE_URL`) exists but is **not** wired up as a default for the `--page` CLI flag.
 
-`--rate-mode paranoid` is passed explicitly too; `index.js` sets `process.env.RATE_MODE` from this
+`--rate-mode moderate` is passed explicitly too; `index.js` sets `process.env.RATE_MODE` from this
 flag *before* `config.js` is required, so it works regardless of what (if anything) is in `.env`.
 
 ### 8.3 Lock File
 
 `data/inviter.lock`, managed by `rate-limiter.js` — prevents overlapping runs if one invocation is
-still going (discovery phase + invite phase can together take up to ~30 min in the worst case:
-`discoveryTimeCapMs` 10 min + `runTimeCapMs` 20 min for paranoid mode) when the next scheduled run
+still going (discovery phase + invite phase can together take up to ~40 min in the worst case:
+`discoveryTimeCapMs` 10 min + `runTimeCapMs` 30 min for moderate mode) when the next scheduled run
 would otherwise fire.
 
 ### 8.4 Logs
