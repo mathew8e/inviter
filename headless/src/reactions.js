@@ -379,6 +379,7 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
 
     let invitesSent = 0;
     let scrollsWithoutNew = 0;
+    let totalIterations = 0;
     // Long runs of already-followed reactors (e.g. a politician who has
     // manually invited people for years) can produce hundreds of
     // consecutive scrolls with zero new invite buttons, long before the
@@ -422,6 +423,21 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
     `;
 
     while (invitesSent < maxInvites && scrollsWithoutNew < MAX_SCROLLS_WITHOUT_NEW) {
+        totalIterations++;
+        // A post with thousands of reactors, most already following the
+        // page, can produce long genuine stretches of zero new invites —
+        // confirmed live (2026-07-04) the page owner mistook this for a
+        // frozen/stuck run after watching the invited-count sit still for
+        // 15 minutes. Nothing was actually wrong: it was still scrolling
+        // through already-followed people looking for the scattered
+        // remaining candidates. A periodic heartbeat makes that visible.
+        if (totalIterations % 20 === 0) {
+            logger.info(
+                `... still scanning this post (iteration #${totalIterations}, ` +
+                `${invitesSent}/${maxInvites} invited so far, ${scrollsWithoutNew} scans since the last new invite)`,
+            );
+        }
+
         // ── Step 1: Scan for clickable invite buttons ──
         //
         // Three bugs were fixed vs the original scan:

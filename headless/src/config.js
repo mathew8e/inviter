@@ -60,7 +60,23 @@ if (!RATE_MODES[rateModeName]) {
         `Invalid RATE_MODE "${rateModeName}". Must be one of: ${valid}`,
     );
 }
-const rateMode = RATE_MODES[rateModeName];
+const rateMode = { ...RATE_MODES[rateModeName] };
+
+// Daily/per-post volume caps are the one thing worth overriding independently
+// of the rest of a rate mode's pacing (click delay, scroll delay, run-time
+// cap) — those govern timing sensitive to Facebook's DOM update speed and
+// have been carefully tuned for accuracy, whereas the volume caps are just
+// "how much is this specific account's reputation known to tolerate."
+// Confirmed with the page owner (2026-07-04): routinely sends 500/day
+// manually, tested 1,400/day without issue — far above the generic
+// paranoid/moderate/aggressive guesses, which were conservative estimates
+// made with zero account history to go on.
+if (process.env.DAILY_MAX_OVERRIDE) {
+    rateMode.dailyMax = parseInt(process.env.DAILY_MAX_OVERRIDE, 10);
+}
+if (process.env.PER_POST_MAX_OVERRIDE) {
+    rateMode.perPostMax = parseInt(process.env.PER_POST_MAX_OVERRIDE, 10);
+}
 
 // ──────────────────────────────────────────────
 // Paths
