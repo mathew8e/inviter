@@ -87,6 +87,11 @@ const config = Object.freeze({
     dateFrom: process.env.DATE_FROM || "all",
     dateTo: process.env.DATE_TO || "all",
 
+    // How far back the Content Library's own date-range picker should be
+    // set (years). Posts older than this are out of scope entirely —
+    // project policy, not just a discovery filter (see PLAN.md §7).
+    yearsBack: parseInt(process.env.YEARS_BACK || "3", 10),
+
     // ── Paths ──
     projectRoot: PROJECT_ROOT,
     dataDir: DATA_DIR,

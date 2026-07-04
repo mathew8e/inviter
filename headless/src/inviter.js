@@ -216,7 +216,7 @@ async function runSinglePost(page, url, dryRun, selectors) {
  * @returns {Promise<object>} summary
  */
 async function runPageWorkflow(page, opts) {
-    const { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors } = opts;
+    const { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors, yearsBack } = opts;
 
     const summary = {
         postsDiscovered: 0,
@@ -232,7 +232,9 @@ async function runPageWorkflow(page, opts) {
     // up front so we can skip them instead of attempting a doomed
     // reactions-dialog open). Navigates there directly; no need to visit
     // the public page URL first.
-    const discovered = await scraper.discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts);
+    const discovered = await scraper.discoverPostsFromContentLibrary(
+        page, dateFrom, dateTo, maxPosts, yearsBack ?? config.yearsBack,
+    );
     summary.postsDiscovered = discovered.length;
 
     // Skip posts already marked "done" in a previous run
@@ -381,6 +383,7 @@ async function runWithBrowser({
     dateFrom = config.dateFrom,
     dateTo = config.dateTo,
     maxPosts = config.maxPostsPerRun,
+    yearsBack = config.yearsBack,
     selectors = reactions.INVITE_SELECTORS,
 } = {}) {
     const isLoginMode = waitForLogin === true;
@@ -455,7 +458,7 @@ async function runWithBrowser({
 
         if (pageUrl) {
             // ── Full page workflow ──
-            summary = await runPageWorkflow(page, { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors });
+            summary = await runPageWorkflow(page, { pageUrl, dryRun, dateFrom, dateTo, maxPosts, yearsBack, selectors });
         } else if (url) {
             // ── Single-post legacy/testing mode ──
             const result = await runSinglePost(page, url, dryRun, selectors);

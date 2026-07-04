@@ -60,6 +60,11 @@ async function main() {
             default: config.maxPostsPerRun,
             describe: "Maximum number of posts to process this run",
         })
+        .option("years-back", {
+            type: "number",
+            default: config.yearsBack,
+            describe: "How many years of Content Library history to consider (older posts are out of scope)",
+        })
         .option("rate-mode", {
             type: "string",
             choices: ["paranoid", "moderate", "aggressive"],
@@ -105,6 +110,7 @@ async function main() {
             dateFrom: argv["date-from"],
             dateTo: argv["date-to"],
             maxPosts: argv["max-posts"],
+            yearsBack: argv["years-back"],
             selectors,
         });
 

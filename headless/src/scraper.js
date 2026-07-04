@@ -609,6 +609,128 @@ const CONTENT_LIBRARY_URL =
     "?filter=PUBLISHED&post_type=ALL_CONTENT&sort_by=DATE";
 
 /**
+ * Selects a custom date range in the Content Library's date-range picker,
+ * spanning from `yearsBack` years ago to today.
+ *
+ * The date_range URL parameter alone does NOT work — confirmed live
+ * (2026-07-04) that navigating directly to a URL with
+ * date_range=CUSTOM&start_date=...&end_date=... silently keeps showing
+ * only the default "Last 28 days" data; the underlying query only
+ * updates after a genuine click on "Apply" inside the picker. There is
+ * also no "ALL_TIME"/"LIFETIME" preset — only Today/7/14/28/60/90 days
+ * and "This year", so anything older than the current year requires
+ * driving the actual calendar UI.
+ *
+ * Mechanics (reverse-engineered live): the calendar shows one visible
+ * month at a time. The left/right chevron arrows each step exactly one
+ * month. Clicking a day sets the START of the range (highlighted blue);
+ * clicking a second day (after navigating forward again) sets the END
+ * and enables the "Apply" button. Confirmed: 36 clicks on the left arrow
+ * from the current month reliably lands exactly 3 years back.
+ *
+ * @param {import('puppeteer').Page} page
+ * @param {number} yearsBack — how many years of history to include
+ * @returns {Promise<boolean>} true if the range was set and applied
+ */
+async function setContentLibraryDateRange(page, yearsBack = 3) {
+    logger.info(`Setting Content Library date range to last ${yearsBack} years...`);
+
+    // Open the date-range picker (button shows text like "Last 28 days: ...")
+    const opened = await page.evaluate(() => {
+        for (const el of document.querySelectorAll('[role="button"]')) {
+            const t = (el.textContent || "").trim();
+            if (/^Last \d+ days:/.test(t) || /^This year:/.test(t) || /^Custom:/.test(t)) {
+                const r = el.getBoundingClientRect();
+                el.scrollIntoView({ block: "center" });
+                return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+            }
+        }
+        return null;
+    });
+    if (!opened) {
+        logger.warn("Could not find the date-range picker button — leaving default range in place.");
+        return false;
+    }
+    await page.mouse.click(opened.x, opened.y);
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // Coordinates of the calendar's prev/next month chevrons, relative to
+    // the picker popup that opens just below/right of the button. These
+    // were confirmed against a 1280x900 viewport — if the layout shifts,
+    // this will need re-verification (see PLAN.md testing notes).
+    const PREV_MONTH_XY = [1004, 355];
+    const NEXT_MONTH_XY = [1240, 355];
+
+    const clickDayInVisibleMonth = async (dayNumber) => {
+        const rect = await page.evaluate((day) => {
+            for (const el of document.querySelectorAll("*")) {
+                if ((el.textContent || "").trim() === String(day) && el.children.length === 0) {
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 0 && r.width < 60) return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+                }
+            }
+            return null;
+        }, dayNumber);
+        if (!rect) return false;
+        await page.mouse.click(rect.x, rect.y);
+        await new Promise((r) => setTimeout(r, 800));
+        return true;
+    };
+
+    const today = new Date();
+
+    // Navigate back yearsBack*12 months, click day 1 as the range start.
+    for (let i = 0; i < yearsBack * 12; i++) {
+        await page.mouse.click(...PREV_MONTH_XY);
+        await new Promise((r) => setTimeout(r, 150));
+    }
+    const startClicked = await clickDayInVisibleMonth(1);
+    if (!startClicked) {
+        logger.warn("Could not click a start day in the calendar — leaving default range in place.");
+        return false;
+    }
+
+    // Navigate forward the same distance plus however many months are
+    // needed to reach the CURRENT month, then click today's day-of-month.
+    for (let i = 0; i < yearsBack * 12 + today.getMonth() + 1; i++) {
+        await page.mouse.click(...NEXT_MONTH_XY);
+        await new Promise((r) => setTimeout(r, 150));
+    }
+    const endClicked = await clickDayInVisibleMonth(today.getDate());
+    if (!endClicked) {
+        logger.warn("Could not click today's day in the calendar to complete the range.");
+        return false;
+    }
+
+    // Click Apply
+    const applyRect = await page.evaluate(() => {
+        for (const el of document.querySelectorAll('[role="button"], button')) {
+            if ((el.textContent || "").trim() === "Apply") {
+                const r = el.getBoundingClientRect();
+                return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+            }
+        }
+        return null;
+    });
+    if (!applyRect) {
+        logger.warn("Apply button not found — date range may not have been applied.");
+        return false;
+    }
+    await page.mouse.click(applyRect.x, applyRect.y);
+    await new Promise((r) => setTimeout(r, 3000));
+
+    const finalLabel = await page.evaluate(() => {
+        for (const el of document.querySelectorAll('[role="button"]')) {
+            const t = (el.textContent || "").trim();
+            if (/^Custom:/.test(t)) return t;
+        }
+        return null;
+    });
+    logger.info(`Date range applied: ${finalLabel || "(label not confirmed, but Apply was clicked)"}`);
+    return true;
+}
+
+/**
  * Parses a Content Library date string into YYYY-MM-DD.
  * Formats seen: "Today at 5:22 PM", "Yesterday at 7:14 PM", "Jun 30 at 7:14 PM".
  */
@@ -679,7 +801,12 @@ async function extractContentLibraryRows(page) {
                     encodeURIComponent(contentId) +
                     "&entry_point=ProdashCometContentLibraryTable",
                 dateText: dateMatch ? dateMatch[0] : "",
-                isVideoStory: /video story/i.test(rowText),
+                // Both "Video story" and "Photo story" are ephemeral Story
+                // reposts of an existing post (confirmed live 2026-07-03 for
+                // video; same UI pattern applies to photo stories) — neither
+                // has a working reactions dialog, and the underlying content
+                // is already discovered separately as its own "post" entry.
+                isVideoStory: /(video|photo) story/i.test(rowText),
                 caption: rowText.slice(0, 150),
             });
         }
@@ -705,23 +832,37 @@ async function extractContentLibraryRows(page) {
  * @param {string} dateFrom — ISO date or "all"
  * @param {string} dateTo — ISO date or "all"
  * @param {number} maxPosts
+ * @param {number} [yearsBack=3] — how far back the Content Library's own
+ *        date-range filter should reach. Anything older is out of scope
+ *        entirely per project policy — see PLAN.md §7.
  * @returns {Promise<Post[]>}
  */
-async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts) {
+async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts, yearsBack = 3) {
     const existing = loadPostList();
     const alreadySeen = new Set(existing.posts.map((p) => p.url).filter(Boolean));
 
     logger.info(
-        `Discovering posts from Content Library (max ${maxPosts}, dateFrom ${dateFrom})`,
+        `Discovering posts from Content Library (max ${maxPosts}, dateFrom ${dateFrom}, yearsBack ${yearsBack})`,
     );
 
     await page.goto(CONTENT_LIBRARY_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
     await new Promise((r) => setTimeout(r, 5000));
 
+    const rangeSet = await setContentLibraryDateRange(page, yearsBack);
+    if (!rangeSet) {
+        logger.warn(
+            "Could not set the Content Library date range via the picker UI — " +
+            "falling back to whatever the default (Last 28 days) range shows.",
+        );
+    }
+
     const posts = [];
     let scrollHeightUnchangedStreak = 0;
+    const MAX_SCROLLS_WITHOUT_NEW = 500; // safety net only, not the primary exit signal
 
-    while (posts.length < maxPosts && scrollHeightUnchangedStreak < 5) {
+    const getPageScrollHeight = () => page.evaluate(() => document.body.scrollHeight);
+
+    while (posts.length < maxPosts && scrollHeightUnchangedStreak < MAX_SCROLLS_WITHOUT_NEW) {
         const rows = await extractContentLibraryRows(page);
 
         for (const row of rows) {
@@ -737,12 +878,12 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts)
                 invitedCount: 0,
                 processedAt: null,
                 error: null,
-                // Content Library labels these "Video story" — confirmed live
-                // (2026-07-02) these are ephemeral Story reposts of an
-                // existing post, not standalone Reels, and never expose a
-                // working reactions dialog. The underlying post is already
-                // discovered separately as its own "post" entry, so nothing
-                // is lost by treating/skipping these as duplicates.
+                // Content Library labels these "Video story"/"Photo story" —
+                // confirmed live (2026-07-02/03) these are ephemeral Story
+                // reposts of an existing post, not standalone Reels, and
+                // never expose a working reactions dialog. The underlying
+                // post is already discovered separately as its own "post"
+                // entry, so nothing is lost by treating these as duplicates.
                 contentType: row.isVideoStory ? "story" : "post",
             };
 
@@ -753,14 +894,30 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts)
             if (posts.length >= maxPosts) break;
         }
 
+        const heightBefore = await getPageScrollHeight();
         const grew = await scrollToBottom(page);
         await new Promise((r) => setTimeout(r, 2500));
 
-        if (!grew) {
-            scrollHeightUnchangedStreak++;
-        } else {
+        if (grew) {
             scrollHeightUnchangedStreak = 0;
+            continue;
         }
+
+        // Be patient before concluding we've reached the end — confirmed
+        // live (2026-07-03) that a reactions list can pause for many
+        // seconds mid-load without genuinely being finished; the same
+        // applies here. Retry several times with growing waits.
+        let stillStalled = true;
+        const retryDelaysMs = [1000, 2000, 3000, 4000, 5000];
+        for (const delay of retryDelaysMs) {
+            const heightAfter = await getPageScrollHeight();
+            if (heightAfter > heightBefore) {
+                stillStalled = false;
+                break;
+            }
+            await new Promise((r) => setTimeout(r, delay));
+        }
+        scrollHeightUnchangedStreak = stillStalled ? scrollHeightUnchangedStreak + 1 : 0;
     }
 
     logger.info(`Discovered ${posts.length} posts total from Content Library.`);
@@ -786,6 +943,7 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts)
 module.exports = {
     discoverPosts,
     discoverPostsFromContentLibrary,
+    setContentLibraryDateRange,
     extractContentLibraryRows,
     parseContentLibraryDate,
     loadPostList,
