@@ -313,19 +313,27 @@ supported for local visual debugging.
 
 ## 6. Rate Limiting — Three Modes
 
-Unchanged:
-
 | Setting | 🔒 Paranoid | ⚖️ Moderate (default, in use) | ⚡ Aggressive |
 |---------|----------------------|-------------|---------------|
 | **Daily max** | 100 | 250 | 500 |
 | **Per post max** | 30 | 75 | 150 |
 | **Base delay** | 5,000 ms | 3,000 ms | 1,500 ms |
 | **Random extra** | 0–5,000 ms | 0–3,000 ms | 0–1,500 ms |
-| **Scroll delay** | 3,000 ms | 2,000 ms | 1,000 ms |
+| **Scroll delay** | 1,500 ms | 1,000 ms | 500 ms |
 | **Post cooldown** | 30 s | 15 s | 5 s |
 | **Cooldown on error** | 48 h | 24 h | 12 h |
 | **Max posts/run (config default)** | 5 | 10 | 20 |
 | **Run time cap** | 20 min | 30 min | 45 min |
+
+**Scroll delay halved (2026-07-05):** the user asked whether the run could be sped up "without getting
+flagged." `scrollDelayMs` is the wait after every scroll before re-scanning for invite buttons — the
+dominant per-iteration cost on a post with a huge reactor list (a single post can loop through this
+thousands of times), but it's pure page-reading, not an invite-click action. Unlike `baseDelayMs`/
+`randomExtraMs` (which pace the actual "Invite" clicks Facebook's abuse detection would plausibly
+watch), scroll timing is indistinguishable from normal browsing — no account-risk tradeoff in speeding
+it up, only a correctness one (not giving Facebook's lazy-loader enough time to render new rows), which
+is why it was halved rather than cut more aggressively. Click pacing and the end-of-list patience
+retries (§11.3 — calibrated for accuracy, not speed) are both left untouched.
 
 `--max-posts` on the actual cron line overrides the config default (see §7.5) — this is safe because
 `runTimeCapMs` and the daily budget independently bound how much real inviting happens per run,
