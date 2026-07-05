@@ -114,6 +114,16 @@ const config = Object.freeze({
     // seen" backlog grows over the multi-day 3-year catch-up.
     discoveryTimeCapMs: parseInt(process.env.DISCOVERY_TIME_CAP_MS || "600000", 10),
 
+    // Wall-clock cap (ms) on a SINGLE post's scroll-and-invite loop.
+    // runTimeCapMs (in inviter.js's post loop) is only checked BETWEEN
+    // posts — a single post with a huge reactor list scattered with many
+    // invite candidates can otherwise run far past the intended run cap.
+    // Confirmed live (2026-07-04/05): one post ran for ~16 HOURS overnight
+    // before an unrelated Puppeteer protocol timeout finally killed it.
+    // Default (15 min) leaves room for more than one post within a
+    // moderate-mode 30-minute run cap.
+    postTimeCapMs: parseInt(process.env.POST_TIME_CAP_MS || "900000", 10),
+
     // ── Paths ──
     projectRoot: PROJECT_ROOT,
     dataDir: DATA_DIR,

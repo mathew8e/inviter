@@ -369,17 +369,29 @@ async function findScrollableContainer(page) {
  * @param {number} baseDelayMs — base delay between clicks (ms)
  * @param {boolean} dryRun — if true, log buttons but don't click
  * @param {Array<string>} selectors — selectors to use (INVITE_SELECTORS or TEST_SELECTORS)
+ * @param {number} [maxTimeMs] — wall-clock cap for a SINGLE post. `runTimeCapMs`
+ *        in inviter.js is only checked BETWEEN posts, never inside this loop —
+ *        confirmed live (2026-07-04/05) that a single post with a huge reactor
+ *        list scattered with hundreds of invite candidates ran for ~16 HOURS
+ *        overnight before an unrelated Puppeteer protocol timeout finally
+ *        killed it, completely bypassing the intended 30-minute run cap. This
+ *        gives every post its own hard ceiling so one post can never consume
+ *        the whole run (or more).
  * @returns {Promise<{invited: number, scanned: number, reason: string}>}
  */
-async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dryRun = false, selectors = INVITE_SELECTORS) {
+async function scrollAndInvite(
+    page, containerInfo, maxInvites, baseDelayMs, dryRun = false,
+    selectors = INVITE_SELECTORS, maxTimeMs = config.postTimeCapMs,
+) {
     logger.info(
         `Starting scroll-and-invite loop (max ${maxInvites} invites, ` +
-        `base delay ${baseDelayMs}ms, dryRun=${dryRun})`,
+        `base delay ${baseDelayMs}ms, dryRun=${dryRun}, post time cap ${maxTimeMs}ms)`,
     );
 
     let invitesSent = 0;
     let scrollsWithoutNew = 0;
     let totalIterations = 0;
+    const postStart = Date.now();
     // Long runs of already-followed reactors (e.g. a politician who has
     // manually invited people for years) can produce hundreds of
     // consecutive scrolls with zero new invite buttons, long before the
@@ -423,6 +435,13 @@ async function scrollAndInvite(page, containerInfo, maxInvites, baseDelayMs, dry
     `;
 
     while (invitesSent < maxInvites && scrollsWithoutNew < MAX_SCROLLS_WITHOUT_NEW) {
+        if (Date.now() - postStart > maxTimeMs) {
+            logger.warn(
+                `Post time cap (${maxTimeMs}ms) reached with ${invitesSent}/${maxInvites} invited — ` +
+                "moving on to the next post. The rest of this post's reactors are picked up next run.",
+            );
+            return { invited: invitesSent, scanned: null, reason: "post_time_cap" };
+        }
         totalIterations++;
         // A post with thousands of reactors, most already following the
         // page, can produce long genuine stretches of zero new invites —
