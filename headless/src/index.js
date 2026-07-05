@@ -60,10 +60,10 @@ async function main() {
             default: config.maxPostsPerRun,
             describe: "Maximum number of posts to process this run",
         })
-        .option("years-back", {
-            type: "number",
-            default: config.yearsBack,
-            describe: "How many years of Content Library history to consider (older posts are out of scope)",
+        .option("discover-since", {
+            type: "string",
+            default: config.discoverSinceDate,
+            describe: "Absolute ISO date (YYYY-MM-DD) the Content Library scan reaches back to (older posts are out of scope)",
         })
         .option("rate-mode", {
             type: "string",
@@ -110,7 +110,7 @@ async function main() {
             dateFrom: argv["date-from"],
             dateTo: argv["date-to"],
             maxPosts: argv["max-posts"],
-            yearsBack: argv["years-back"],
+            sinceDate: argv["discover-since"],
             selectors,
         });
 

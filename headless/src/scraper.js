@@ -642,8 +642,23 @@ const CONTENT_LIBRARY_URL =
     "?filter=PUBLISHED&post_type=ALL_CONTENT&sort_by=DATE";
 
 /**
+ * Returns the whole-calendar-month gap between two dates (e.g. 2025-10-01 to
+ * 2026-07-05 is 9 months) — used to convert an absolute cutoff date into the
+ * number of "previous month" calendar clicks setContentLibraryDateRange()
+ * needs, since the picker only understands relative month navigation, not
+ * absolute dates.
+ *
+ * @param {Date} fromDate
+ * @param {Date} toDate
+ * @returns {number}
+ */
+function monthsBetween(fromDate, toDate) {
+    return (toDate.getFullYear() - fromDate.getFullYear()) * 12 + (toDate.getMonth() - fromDate.getMonth());
+}
+
+/**
  * Selects a custom date range in the Content Library's date-range picker,
- * spanning from `yearsBack` years ago to today.
+ * spanning from `sinceDate` to today.
  *
  * The date_range URL parameter alone does NOT work — confirmed live
  * (2026-07-04) that navigating directly to a URL with
@@ -661,12 +676,21 @@ const CONTENT_LIBRARY_URL =
  * and enables the "Apply" button. Confirmed: 36 clicks on the left arrow
  * from the current month reliably lands exactly 3 years back.
  *
+ * Takes an absolute cutoff date (not a relative "years back" count) — the
+ * project's actual scope has changed over time (originally 3 years, then
+ * narrowed to a specific 2025-10-01 backfill start per the page owner's
+ * request — see PLAN.md §7), and an absolute date is also what's needed
+ * for the planned post-backfill "last 5 days" maintenance window, so this
+ * is the one representation that covers both.
+ *
  * @param {import('puppeteer').Page} page
- * @param {number} yearsBack — how many years of history to include
+ * @param {string} sinceDate — ISO date (YYYY-MM-DD) to use as the range start
  * @returns {Promise<boolean>} true if the range was set and applied
  */
-async function setContentLibraryDateRange(page, yearsBack = 3) {
-    logger.info(`Setting Content Library date range to last ${yearsBack} years...`);
+async function setContentLibraryDateRange(page, sinceDate) {
+    const today = new Date();
+    const monthsBack = Math.max(0, monthsBetween(new Date(sinceDate), today));
+    logger.info(`Setting Content Library date range to ${sinceDate} (${monthsBack} months back)...`);
 
     // Open the date-range picker (button shows text like "Last 28 days: ...")
     const opened = await page.evaluate(() => {
@@ -710,10 +734,8 @@ async function setContentLibraryDateRange(page, yearsBack = 3) {
         return true;
     };
 
-    const today = new Date();
-
-    // Navigate back yearsBack*12 months, click day 1 as the range start.
-    for (let i = 0; i < yearsBack * 12; i++) {
+    // Navigate back monthsBack months, click day 1 as the range start.
+    for (let i = 0; i < monthsBack; i++) {
         await page.mouse.click(...PREV_MONTH_XY);
         await new Promise((r) => setTimeout(r, 150));
     }
@@ -725,7 +747,7 @@ async function setContentLibraryDateRange(page, yearsBack = 3) {
 
     // Navigate forward the same distance plus however many months are
     // needed to reach the CURRENT month, then click today's day-of-month.
-    for (let i = 0; i < yearsBack * 12 + today.getMonth() + 1; i++) {
+    for (let i = 0; i < monthsBack + today.getMonth() + 1; i++) {
         await page.mouse.click(...NEXT_MONTH_XY);
         await new Promise((r) => setTimeout(r, 150));
     }
@@ -865,30 +887,31 @@ async function extractContentLibraryRows(page) {
  * @param {string} dateFrom — ISO date or "all"
  * @param {string} dateTo — ISO date or "all"
  * @param {number} maxPosts
- * @param {number} [yearsBack=3] — how far back the Content Library's own
- *        date-range filter should reach. Anything older is out of scope
- *        entirely per project policy — see PLAN.md §7.
+ * @param {string} [sinceDate] — absolute ISO date (YYYY-MM-DD) the Content
+ *        Library's own date-range filter should reach back to. Anything
+ *        older is out of scope entirely per project policy — see PLAN.md §7.
+ *        Defaults to config.discoverSinceDate.
  * @param {number} [maxDiscoveryTimeMs=600000] — wall-clock cap on how long
  *        this scan can run. Each cron run has to re-scroll past every
  *        already-seen row before reaching new ones at the frontier, so as
- *        the 3-year backlog is worked through this naturally gets slower —
- *        this cap guarantees a single cron invocation can't run unboundedly
+ *        the backlog is worked through this naturally gets slower — this
+ *        cap guarantees a single cron invocation can't run unboundedly
  *        long. Whatever's found so far is returned; the rest is picked up
- *        by tomorrow's run (same multi-day catch-up as the invite phase).
+ *        by a future run (same multi-day catch-up as the invite phase).
  * @returns {Promise<Post[]>}
  */
-async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts, yearsBack = 3, maxDiscoveryTimeMs = 600000) {
+async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts, sinceDate = config.discoverSinceDate, maxDiscoveryTimeMs = 600000) {
     const existing = loadPostList();
     const alreadySeen = new Set(existing.posts.map((p) => p.url).filter(Boolean));
 
     logger.info(
-        `Discovering posts from Content Library (max ${maxPosts}, dateFrom ${dateFrom}, yearsBack ${yearsBack})`,
+        `Discovering posts from Content Library (max ${maxPosts}, dateFrom ${dateFrom}, sinceDate ${sinceDate})`,
     );
 
     await page.goto(CONTENT_LIBRARY_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
     await new Promise((r) => setTimeout(r, 5000));
 
-    const rangeSet = await setContentLibraryDateRange(page, yearsBack);
+    const rangeSet = await setContentLibraryDateRange(page, sinceDate);
     if (!rangeSet) {
         logger.warn(
             "Could not set the Content Library date range via the picker UI — " +

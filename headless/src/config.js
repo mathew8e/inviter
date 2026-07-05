@@ -113,15 +113,22 @@ const config = Object.freeze({
     dateFrom: process.env.DATE_FROM || "all",
     dateTo: process.env.DATE_TO || "all",
 
-    // How far back the Content Library's own date-range picker should be
-    // set (years). Posts older than this are out of scope entirely —
-    // project policy, not just a discovery filter (see PLAN.md §7).
-    yearsBack: parseInt(process.env.YEARS_BACK || "3", 10),
+    // Absolute cutoff date the Content Library's own date-range picker
+    // should reach back to. Posts older than this are out of scope
+    // entirely — project policy, not just a discovery filter (see PLAN.md
+    // §7). Originally a rolling "3 years back" window; narrowed to a fixed
+    // 2025-10-01 backfill start (2026-07-05) per the page owner's direct
+    // request — the account's actually-useful history doesn't go back
+    // nearly that far, and the narrower fixed range finishes the backlog
+    // far faster. Once the backlog is cleared, this is expected to switch
+    // to a short rolling window (e.g. "5 days back") for ongoing
+    // maintenance — see PLAN.md §7 for the full plan.
+    discoverSinceDate: process.env.DISCOVER_SINCE_DATE || "2025-10-01",
 
     // Wall-clock cap (ms) on the Content Library discovery/scroll phase per
     // run — independent of runTimeCapMs, which only bounds the invite
     // phase. Keeps a single cron invocation bounded even as the "already
-    // seen" backlog grows over the multi-day 3-year catch-up.
+    // seen" backlog grows over the multi-day catch-up.
     discoveryTimeCapMs: parseInt(process.env.DISCOVERY_TIME_CAP_MS || "600000", 10),
 
     // Wall-clock cap (ms) on a SINGLE post's scroll-and-invite loop.

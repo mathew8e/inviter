@@ -67,17 +67,13 @@ function getWarningsAndErrors(lines) {
 }
 
 /**
- * The date range the program actually scans on each run: from `yearsBack`
- * years ago through today. Not stored anywhere — computed the same way
- * scraper.setContentLibraryDateRange() derives it, so the dashboard always
- * reflects the real current window even as "today" moves forward.
+ * The date range the program actually scans on each run: from
+ * config.discoverSinceDate through today.
  */
 function getDiscoveryRange() {
     const to = new Date();
-    const from = new Date(to);
-    from.setFullYear(from.getFullYear() - config.yearsBack);
     const fmt = (d) => d.toISOString().slice(0, 10);
-    return { from: fmt(from), to: fmt(to), yearsBack: config.yearsBack };
+    return { from: config.discoverSinceDate, to: fmt(to) };
 }
 
 function gatherData() {
@@ -217,7 +213,6 @@ function renderPage(data) {
     <div class="card">
       <div class="label">Sledované období</div>
       <div class="value" style="font-size:16px;">${esc(fmtDate(data.discoveryRange.from))} – ${esc(fmtDate(data.discoveryRange.to))}</div>
-      <div class="sub" style="margin:4px 0 0;">posledních ${data.discoveryRange.yearsBack} ${data.discoveryRange.yearsBack === 1 ? "rok" : data.discoveryRange.yearsBack < 5 ? "roky" : "let"}</div>
     </div>
     <div class="card">
       <div class="label">Dnešní limit pozvánek</div>

@@ -216,7 +216,7 @@ async function runSinglePost(page, url, dryRun, selectors) {
  * @returns {Promise<object>} summary
  */
 async function runPageWorkflow(page, opts) {
-    const { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors, yearsBack } = opts;
+    const { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors, sinceDate } = opts;
 
     const summary = {
         postsDiscovered: 0,
@@ -233,7 +233,7 @@ async function runPageWorkflow(page, opts) {
     // reactions-dialog open). Navigates there directly; no need to visit
     // the public page URL first.
     const discovered = await scraper.discoverPostsFromContentLibrary(
-        page, dateFrom, dateTo, maxPosts, yearsBack ?? config.yearsBack, config.discoveryTimeCapMs,
+        page, dateFrom, dateTo, maxPosts, sinceDate ?? config.discoverSinceDate, config.discoveryTimeCapMs,
     );
     summary.postsDiscovered = discovered.length;
 
@@ -249,12 +249,20 @@ async function runPageWorkflow(page, opts) {
     // the next run — it just found a fresh batch further back in time.
     // Pull the FULL accumulated list instead of just this run's new batch,
     // so nothing already-pending is ever left behind.
+    //
+    // Sorted OLDEST-first (not newest-first): the page owner explicitly
+    // wants the backlog worked from the deep past forward, not from
+    // yesterday backward, since the recent posts are the ones least likely
+    // to represent missed opportunity. Once the backlog is fully cleared
+    // (see PLAN.md §7), the plan is to switch discoverSinceDate to a short
+    // rolling window (e.g. "5 days back"), at which point sort order stops
+    // mattering much either way.
     const allKnownPosts = scraper.loadPostList().posts;
     const pending = allKnownPosts
         .filter((p) => p.status !== "done")
-        .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     logger.info(
-        `${pending.length}/${allKnownPosts.length} known posts are pending (not yet done) — ` +
+        `${pending.length}/${allKnownPosts.length} known posts are pending (not yet done, oldest first) — ` +
         `${discovered.length} newly discovered this run.`,
     );
 
@@ -392,6 +400,7 @@ async function runPageWorkflow(page, opts) {
  * @param {string} [options.dateFrom] - ISO date or "all" (defaults to config.dateFrom)
  * @param {string} [options.dateTo] - ISO date or "all" (defaults to config.dateTo)
  * @param {number} [options.maxPosts] - Max posts to process this run (defaults to config.maxPostsPerRun)
+ * @param {string} [options.sinceDate] - Absolute ISO date the Content Library scan reaches back to (defaults to config.discoverSinceDate)
  * @param {Array<string>} [options.selectors] - Override invite selectors (e.g. reactions.TEST_SELECTORS)
  * @returns {Promise<object>} summary - { postsDiscovered, postsProcessed, totalInvited, stoppedReason, results }
  */
@@ -405,7 +414,7 @@ async function runWithBrowser({
     dateFrom = config.dateFrom,
     dateTo = config.dateTo,
     maxPosts = config.maxPostsPerRun,
-    yearsBack = config.yearsBack,
+    sinceDate = config.discoverSinceDate,
     selectors = reactions.INVITE_SELECTORS,
 } = {}) {
     const isLoginMode = waitForLogin === true;
@@ -480,7 +489,7 @@ async function runWithBrowser({
 
         if (pageUrl) {
             // ── Full page workflow ──
-            summary = await runPageWorkflow(page, { pageUrl, dryRun, dateFrom, dateTo, maxPosts, yearsBack, selectors });
+            summary = await runPageWorkflow(page, { pageUrl, dryRun, dateFrom, dateTo, maxPosts, sinceDate, selectors });
         } else if (url) {
             // ── Single-post legacy/testing mode ──
             const result = await runSinglePost(page, url, dryRun, selectors);
