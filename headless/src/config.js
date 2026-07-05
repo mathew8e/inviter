@@ -19,7 +19,17 @@ const RATE_MODES = {
         perPostMax: 30,
         baseDelayMs: 5000,
         randomExtraMs: 5000,
-        scrollDelayMs: 3000,
+        // scrollDelayMs halved (2026-07-05): this is just the wait after each
+        // scroll before re-scanning the page — it's the dominant per-iteration
+        // cost on a post with a huge reactor list (a single post can loop
+        // thousands of times), but it's pure page-reading, not an
+        // invite-click action. Unlike baseDelayMs/randomExtraMs (which pace
+        // the actual "Invite" clicks Facebook's abuse detection would
+        // plausibly watch), scroll timing is indistinguishable from normal
+        // browsing, so there's no account-risk tradeoff in speeding it up —
+        // only a correctness one (not giving Facebook's lazy-loader enough
+        // time), which is why it isn't cut more aggressively than this.
+        scrollDelayMs: 1500,
         postCooldownMs: 30000,
         errorCooldownHours: 48,
         maxPostsPerRun: 5,
@@ -30,7 +40,7 @@ const RATE_MODES = {
         perPostMax: 75,
         baseDelayMs: 3000,
         randomExtraMs: 3000,
-        scrollDelayMs: 2000,
+        scrollDelayMs: 1000,
         postCooldownMs: 15000,
         errorCooldownHours: 24,
         maxPostsPerRun: 10,
@@ -41,7 +51,7 @@ const RATE_MODES = {
         perPostMax: 150,
         baseDelayMs: 1500,
         randomExtraMs: 1500,
-        scrollDelayMs: 1000,
+        scrollDelayMs: 500,
         postCooldownMs: 5000,
         errorCooldownHours: 12,
         maxPostsPerRun: 20,
