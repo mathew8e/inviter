@@ -65,9 +65,11 @@ audience organically — people who already react are warm leads.
 | `src/dashboard.js` | Read-only HTTP dashboard (`node src/dashboard.js`, default port 8787) — merged posts + invite-history table, budget/status cards, live log panel polling `/api/logs` |
 | `PLAN.md` | This file |
 
-**What's done:** Everything. Discovery via Content Library (with real 3-year date range + working
-scroll), the full invite pipeline, rate limiting, the dashboard, the validation script, and daily cron
-on the Pi. The project is now in **maintenance mode** — see §13 for optional future work.
+**What's done:** Everything. Discovery via Content Library (with a real absolute-date range + working
+scroll), the full invite pipeline, rate limiting, the dashboard, the validation script, and cron running
+every 2 hours on the Pi. Currently backfilling from 2025-10-01 forward, oldest-first — see §7.5/§7.6.
+The project is functionally complete; the remaining work is finishing that backfill and then switching
+to the planned rolling maintenance window (§7.6) — see §13 for other optional future work.
 
 ---
 
@@ -370,14 +372,17 @@ if (process.env.DAILY_MAX_OVERRIDE) rateMode.dailyMax = parseInt(process.env.DAI
 if (process.env.PER_POST_MAX_OVERRIDE) rateMode.perPostMax = parseInt(process.env.PER_POST_MAX_OVERRIDE, 10);
 ```
 
+**Raised to the full tested ceiling on 2026-07-05** — after seeing the first live runs, the owner
+re-confirmed directly: *"muzes 1 den zkusit jen 800, ale pak to zvys na 1400 - mam to vyzkousene, nic se
+nestane"* (try 800 for a day if you want, but then raise it to 1400 — tested, nothing happens).
 **Currently deployed:** `moderate` mode's pacing (3s click delay, 15s post cooldown, 30 min run cap)
-with `DAILY_MAX_OVERRIDE=800` and `PER_POST_MAX_OVERRIDE=240` (same 10:3 ratio as the built-in presets),
-set inline on the crontab line — comfortably under the owner's tested 1,400/day ceiling, above his
-routine 500/day, with margin held back deliberately rather than run right at the tested limit.
+with `DAILY_MAX_OVERRIDE=1400` and `PER_POST_MAX_OVERRIDE=420` (same 10:3 ratio as the built-in
+presets), set inline on the crontab line — matching his explicitly tested-safe ceiling exactly, per his
+own instruction, rather than holding back margin as the initial 800 figure did.
 
 ---
 
-## 7. Post Date Range Strategy — Content Library & `yearsBack`
+## 7. Post Date Range Strategy — Content Library & `discoverSinceDate`
 
 ### 7.1 Why Not Just "All Time"
 
@@ -387,19 +392,25 @@ either silently fall back to the default ("Last 28 days") or show a misleading l
 the underlying query. **Only a genuine calendar interaction ending in a real click on the Apply
 button** updates the real state.
 
-### 7.2 `setContentLibraryDateRange(page, yearsBack)`
+### 7.2 `setContentLibraryDateRange(page, sinceDate)`
 
 Drives the calendar UI with real pixel-coordinate clicks (empirically determined, somewhat fragile if
 Facebook changes the layout):
 
 1. Opens the date-range picker
-2. Clicks "previous month" `yearsBack * 12` times, then clicks day `1`
+2. Clicks "previous month" `monthsBack` times (computed via `monthsBetween(sinceDate, today)`, a whole-
+   calendar-month gap — e.g. 2025-10-01 to 2026-07-05 is 9 months), then clicks day `1`
 3. Clicks "next month" forward to the current month, then clicks today's day number
 4. Clicks **Apply**
 5. Confirms via the resulting `"Custom: ..."` label text
 
-Confirmed live producing `date_range=CUSTOM&start_date=<3-years-ago>&end_date=<today>` and a genuine
+Confirmed live producing `date_range=CUSTOM&start_date=<sinceDate>&end_date=<today>` and a genuine
 `"Custom: Jun 1 - Jul 4"`-style label.
+
+**Takes an absolute date, not a relative "years back" count** — this replaced the original rolling
+`yearsBack` parameter on 2026-07-05 (see §7.5) once the scope shrank from a rolling 3-year window to a
+fixed 2025-10-01 backfill start. An absolute date is also what the planned post-backfill "5 days back"
+rolling maintenance window needs, so this representation covers both phases without another rewrite.
 
 ### 7.3 Scrolling the Table — Real Mouse-Wheel Events
 
@@ -433,33 +444,71 @@ reactions dialog is ever attempted.
 Genuine standalone Reels (not seen as a distinct Content Library category in practice, but handled
 defensively) go through `openReactionsDialogForReel` in `reactions.js` if ever encountered.
 
-### 7.5 Sizing `--max-posts` and `--years-back` for Cron
+### 7.5 Sizing `--max-posts` and `--discover-since` for Cron
 
 `--max-posts` caps **newly discovered** rows per run, roughly half of which are story-duplicates that
 cost nothing (no invite budget, no reactions dialog). Since each cron run has to re-scroll past every
 already-seen row before reaching new ones at the frontier, and the actual invite-sending is
 independently bounded by `runTimeCapMs` + the daily budget, it's safe (and necessary, to make
-meaningful progress through 3 years of backlog) to set `--max-posts` well above the rate-mode's config
-default. **Currently deployed: `--max-posts 60 --years-back 3`** (see §8.1).
+meaningful progress through the backlog) to set `--max-posts` well above the rate-mode's config
+default. **Currently deployed: `--max-posts 60 --discover-since 2025-10-01`** (see §8.1).
+
+**Narrowed from a rolling 3-year window to a fixed 2025-10-01 cutoff (2026-07-05)** — the page owner
+reviewed the first live runs and said scanning back to 2023 wasn't necessary, or even desirable; his
+actually-useful history doesn't go back nearly that far. He offered two options (2025-01-01 or
+2025-10-01); 2025-10-01 (~9 months) was chosen to match his stated urgency about finishing the backlog
+quickly. This is a **fixed absolute date**, not a rolling window — it does NOT get further from "today"
+as days pass; see §7.2 for why an absolute date replaced the old `yearsBack` concept, and §7.6 for the
+planned switch to a rolling window once the backlog is cleared.
 
 The `discoveryTimeCapMs` (default 10 minutes, `config.js`) bounds the discovery/scroll phase
 independently of `runTimeCapMs`, so a single cron invocation can never run away even as the "already
 seen" backlog grows over the multi-day catch-up period. Whatever's found by the time either cap hits
 is processed; the rest is picked up by a future run — this is expected and fine, not an error.
 
+### 7.6 Processing Order — Oldest First During Backfill, Then a Rolling Window
+
+**Changed 2026-07-05**, per direct feedback from the page owner: *"projizdis prispevky ted par dnu
+stare. proc??? zacni od minulosti."* (why are you processing posts that are only a few days old —
+start from the past). `runPageWorkflow`'s `pending` list — the full accumulated `posts.json` backlog,
+not just this run's newly-discovered batch (§9.1/§11.3) — is now sorted **oldest-first** (ascending
+date) instead of newest-first, so once a post from deep in the backlog is discovered, it gets invited
+through before more-recently-discovered posts, not after.
+
+**Planned next phase (not yet implemented):** once the 2025-10-01–today backlog is fully cleared (every
+post `"done"`), the page owner wants to switch to a **rolling 5-days-back window** for ongoing daily
+maintenance — i.e. `discoverSinceDate` becomes `today - 5 days`, recomputed fresh each run, rather than
+a fixed historical date. At that point sort order stops mattering much, since the whole window is
+small. This is a config-line change (`--discover-since` computed dynamically instead of hardcoded), not
+a code change — the absolute-date refactor in §7.2 was specifically done to make this switch trivial
+when the time comes.
+
 ---
 
 ## 8. Scheduled Execution (Cron) — LIVE
 
-### 8.1 The Actual Crontab Entry (installed 2026-07-04, updated same day — see §6/§6.1)
+### 8.1 The Actual Crontab Entry (installed 2026-07-04, revised 2026-07-05 — see §6/§6.1/§7.5/§7.6)
 
 ```
-0 9 * * * cd /home/mathew/inviter/headless && PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium DAILY_MAX_OVERRIDE=800 PER_POST_MAX_OVERRIDE=240 /usr/bin/node src/index.js --page "https://www.facebook.com/DanielKusPlzen" --profile-dir ./profile --no-dry-run --max-posts 60 --years-back 3 --rate-mode moderate >> logs/run-$(date +\%Y-\%m-\%d).log 2>&1
+0 */2 * * * cd /home/mathew/inviter/headless && PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium DAILY_MAX_OVERRIDE=1400 PER_POST_MAX_OVERRIDE=420 /usr/bin/node src/index.js --page "https://www.facebook.com/DanielKusPlzen" --profile-dir ./profile --no-dry-run --max-posts 60 --discover-since 2025-10-01 --rate-mode moderate >> logs/run-$(date +\%Y-\%m-\%d).log 2>&1
 ```
 
-Runs daily at 09:00 on the Pi. Verified `cron` service is `active` via `systemctl is-active cron`.
-See §6 for why `--rate-mode` was bumped from `paranoid` to `moderate`, and §6.1 for why
-`DAILY_MAX_OVERRIDE`/`PER_POST_MAX_OVERRIDE` were added on top of it the same day.
+**Runs every 2 hours** (12 times/day), not once daily as originally set up. Verified `cron` service is
+`active` via `systemctl is-active cron`.
+
+**Why every 2 hours, not once daily (changed 2026-07-05):** the page owner wanted far more posts
+processed per day. The actual bottleneck wasn't the daily invite budget (already raised to 1,400) — it
+was that a single large post's reaction list can eat the *entire* run-time cap (30 min in moderate
+mode) by itself, so "once daily" capped total throughput at roughly one big post per day regardless of
+how large the invite budget was. Running the same bounded 30-minute window 12 times a day instead of
+once lets far more distinct posts get their own processing slot, without changing the per-click pacing
+or raising the total daily invite ceiling — `dailyMax`/`DAILY_MAX_OVERRIDE` still caps total invites
+sent across all of a day's runs combined, exactly as before, just spread across more/shorter windows.
+The lock file (§8.3) already prevents any overlap if one run somehow runs long.
+
+See §6 for why `--rate-mode` was bumped from `paranoid` to `moderate`, §6.1 for the daily/per-post
+volume overrides, §7.5 for the `--discover-since` narrowing, and §7.6 for the oldest-first processing
+order change.
 
 ### 8.2 Why `PUPPETEER_EXECUTABLE_PATH` Is Set Inline
 
