@@ -217,6 +217,7 @@ async function runSinglePost(page, url, dryRun, selectors) {
  */
 async function runPageWorkflow(page, opts) {
     const { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors, sinceDate } = opts;
+    const effectiveSinceDate = sinceDate ?? config.discoverSinceDate;
 
     const summary = {
         postsDiscovered: 0,
@@ -226,6 +227,47 @@ async function runPageWorkflow(page, opts) {
         results: [],
     };
 
+    // ── Two-phase backlog strategy: discovery-only until the full target
+    // date range has been catalogued, THEN switch to normal invite
+    // processing. Confirmed live (2026-07-10): a single giant continuous
+    // backfill session doesn't work — the Content Library table has a
+    // hard per-session pagination ceiling (~80 scrolls, reproduced twice
+    // regardless of patience). But ordinary short sessions genuinely do
+    // make forward progress each time (a fresh session gets a fresh
+    // ceiling) — the real problem was that regular runs were splitting
+    // their limited time between discovery AND invite-processing,
+    // starving discovery exactly when the "already seen" pile got large
+    // enough to need it most (confirmed: 9 of 11 runs on 2026-07-10 found
+    // 0 new posts). Rather than guess at a fixed time split, check
+    // whether discovery has actually reached the target date yet (oldest
+    // known post vs discoverSinceDate) and dedicate the WHOLE run to
+    // discovery until it has — then it switches itself back to normal
+    // behavior automatically. No manual toggling, no separate cron
+    // entries, self-terminating.
+    const existingPosts = scraper.loadPostList().posts;
+    const oldestKnownDate = existingPosts
+        .map((p) => p.date)
+        .filter((d) => d && d !== "unknown")
+        .sort()[0];
+    const discoveryComplete = oldestKnownDate && oldestKnownDate <= effectiveSinceDate;
+
+    if (!discoveryComplete) {
+        logger.info(
+            `Discovery not yet complete (oldest known post: ${oldestKnownDate || "none"}, target: ` +
+            `${effectiveSinceDate}) — this run is discovery-only, no invites will be sent.`,
+        );
+        const discovered = await scraper.discoverPostsFromContentLibrary(
+            page, dateFrom, dateTo, 5000, effectiveSinceDate, config.discoveryOnlyTimeCapMs,
+        );
+        summary.postsDiscovered = discovered.length;
+        summary.stoppedReason = "discovery_only_phase";
+        return summary;
+    }
+
+    logger.info(
+        `Discovery complete (oldest known post ${oldestKnownDate} <= target ${effectiveSinceDate}) — normal mode.`,
+    );
+
     // ── Phase 1: Discover posts via the Professional Dashboard's Content
     // Library (primary method — never loads video/reel players, gives a
     // direct per-post Insights link, and reels are cleanly identifiable
@@ -233,7 +275,7 @@ async function runPageWorkflow(page, opts) {
     // reactions-dialog open). Navigates there directly; no need to visit
     // the public page URL first.
     const discovered = await scraper.discoverPostsFromContentLibrary(
-        page, dateFrom, dateTo, maxPosts, sinceDate ?? config.discoverSinceDate, config.discoveryTimeCapMs,
+        page, dateFrom, dateTo, maxPosts, effectiveSinceDate, config.discoveryTimeCapMs,
     );
     summary.postsDiscovered = discovered.length;
 

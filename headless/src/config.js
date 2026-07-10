@@ -136,8 +136,21 @@ const config = Object.freeze({
     // Wall-clock cap (ms) on the Content Library discovery/scroll phase per
     // run — independent of runTimeCapMs, which only bounds the invite
     // phase. Keeps a single cron invocation bounded even as the "already
-    // seen" backlog grows over the multi-day catch-up.
+    // seen" backlog grows over the multi-day catch-up. Only used once
+    // discovery has already reached discoverSinceDate (see
+    // discoveryOnlyTimeCapMs for the phase before that).
     discoveryTimeCapMs: parseInt(process.env.DISCOVERY_TIME_CAP_MS || "600000", 10),
+
+    // Wall-clock cap (ms) for a "discovery-only" run — used automatically
+    // by runPageWorkflow while the oldest known post is still newer than
+    // discoverSinceDate (i.e. the backlog hasn't been fully catalogued
+    // yet). Deliberately close to the rate mode's full runTimeCapMs, since
+    // these runs skip invite-processing entirely and can dedicate nearly
+    // the whole window to discovery. Confirmed live (2026-07-10): with
+    // discovery and invite-processing splitting a shared 30-minute budget,
+    // 9 of 11 runs in a day found 0 new posts — the backlog wasn't
+    // shrinking fast enough for discovery to ever catch up on its own.
+    discoveryOnlyTimeCapMs: parseInt(process.env.DISCOVERY_ONLY_TIME_CAP_MS || "1500000", 10),
 
     // Wall-clock cap (ms) on a SINGLE post's scroll-and-invite loop.
     // runTimeCapMs (in inviter.js's post loop) is only checked BETWEEN
