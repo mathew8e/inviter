@@ -939,10 +939,18 @@ async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts,
     let stallStreak = 0;
     let totalScrolls = 0;
     const discoveryStart = Date.now();
-    // scrollContentLibraryTable() already retries internally for ~15s before
-    // reporting no-growth, so a small outer streak is plenty of extra margin
-    // (5 consecutive full stalls = ~75s of confirmed no growth = genuinely done).
-    const MAX_STALL_STREAK = 5;
+    // Confirmed live (2026-07-10): 5 was FAR too impatient — two consecutive
+    // dedicated backfill runs both stalled at exactly this point (~30 total
+    // scrolls) while still working through a large already-seen backlog
+    // (164 known posts), reporting "0 posts discovered" despite far more
+    // history genuinely remaining beyond it. The reactions-dialog scroll
+    // loop (reactions.js) tolerates up to 300 consecutive non-growth
+    // attempts for the exact same kind of Facebook-side pacing pause — this
+    // was inconsistent with that lesson already learned once this session.
+    // maxDiscoveryTimeMs (the wall-clock cap) is what actually bounds a
+    // single run now; this streak is just a safety net against a truly
+    // dead/broken scroll, so it can afford to be generous.
+    const MAX_STALL_STREAK = 60;
 
     while (posts.length < maxPosts && stallStreak < MAX_STALL_STREAK) {
         if (Date.now() - discoveryStart > maxDiscoveryTimeMs) {
