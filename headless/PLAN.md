@@ -483,6 +483,40 @@ small. This is a config-line change (`--discover-since` computed dynamically ins
 a code change — the absolute-date refactor in §7.2 was specifically done to make this switch trivial
 when the time comes.
 
+### 7.7 Automatic Two-Phase Mode — Discovery-Only Until the Backlog Is Fully Catalogued
+
+**Added 2026-07-10**, after discovering that regular runs splitting their limited time between
+discovery and invite-processing were starving discovery exactly when it needed time most: on
+2026-07-10, 9 of the day's 11 cron runs found **0 new posts** — the "already seen" pile had grown large
+enough that most 10-minute discovery windows were spent entirely re-scrolling old ground with nothing
+left over to reach fresh content.
+
+The user asked whether discovery and invite-processing could run **in parallel** to solve this. Real
+parallelism was rejected — two Puppeteer instances can't safely share one Chrome profile, `posts.json`/
+`rate-limit-state.json` have no concurrent-write protection (a race could silently lose updates or
+double-invite someone), two simultaneous sessions from one account is a more unusual pattern than one
+continuous session for whatever anti-automation systems Facebook runs, and the Pi's hardware (which
+already had power/undervoltage issues earlier in the project) would be under meaningfully more load.
+
+Instead, `runPageWorkflow` now checks **whether discovery has actually reached `discoverSinceDate` yet**
+— comparing the oldest known post's date against the target — before deciding what kind of run this is:
+
+- **Not yet reached** → this run is **discovery-only**. Nearly the whole time budget
+  (`config.discoveryOnlyTimeCapMs`, default 25 min) goes to discovery; invite-processing is skipped
+  entirely for that run (`stoppedReason: "discovery_only_phase"`).
+- **Already reached** → normal behavior: a short discovery pass (`config.discoveryTimeCapMs`, default
+  10 min) to catch anything newly posted, then the usual oldest-first invite-processing loop.
+
+This is **self-terminating** — no manual toggling, no separate cron entries for the two phases, no
+guessing at a fixed time split (an "alternating odd/even hour cron" approach was considered and
+rejected in favor of this condition-based switch). The same crontab line in §8.1 produces
+discovery-only runs today and will automatically start producing normal invite runs once the backlog
+is fully catalogued, with zero further changes needed.
+
+Confirmed live (2026-07-10): a manual verification run correctly logged *"Discovery not yet complete
+(oldest known post: 2026-06-05, target: 2025-10-01) — this run is discovery-only, no invites will be
+sent."*
+
 ---
 
 ## 8. Scheduled Execution (Cron) — LIVE
