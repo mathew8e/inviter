@@ -141,6 +141,21 @@ const config = Object.freeze({
     // moderate-mode 30-minute run cap.
     postTimeCapMs: parseInt(process.env.POST_TIME_CAP_MS || "900000", 10),
 
+    // How many times a post is allowed to hit postTimeCapMs before it's
+    // given up on and marked "done" anyway. Confirmed live (2026-07-05
+    // through 2026-07-10): a post whose full reactor list can't be
+    // scrolled in one postTimeCapMs window makes ZERO net progress across
+    // repeated attempts — every run reopens the reactions dialog fresh (no
+    // way to resume a saved scroll position; Facebook's virtualized list
+    // only loads more content by reaching its current, session-local
+    // bottom, confirmed via a live scrollTop-jump test that the browser
+    // clamps to already-rendered height rather than skipping ahead) and
+    // hits the exact same ~49,000px depth ceiling every single day. Under
+    // oldest-first processing (see PLAN.md §7.6) this permanently blocks
+    // the front of the queue. Giving up after a few attempts trades
+    // completeness on that one outlier post for actual backlog progress.
+    maxPostTimeCapAttempts: parseInt(process.env.MAX_POST_TIME_CAP_ATTEMPTS || "3", 10),
+
     // ── Paths ──
     projectRoot: PROJECT_ROOT,
     dataDir: DATA_DIR,

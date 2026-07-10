@@ -497,13 +497,29 @@ function mergePostLists(existingPosts, newPosts) {
  * @param {string|null} [updates.error] — error message, or null to clear
  * @returns {boolean} true if the post was found and updated
  */
-function markPostStatus(postUrl, { status, invitedCount, error } = {}) {
+function markPostStatus(postUrl, { status, invitedCount, error, hitPostTimeCap } = {}) {
     const data = loadPostList();
     const post = data.posts.find((p) => p.url === postUrl);
 
     if (!post) {
         logger.warn(`markPostStatus: post not found in posts.json: ${postUrl}`);
         return false;
+    }
+
+    if (hitPostTimeCap) {
+        post.postTimeCapAttempts = (post.postTimeCapAttempts || 0) + 1;
+        if (post.postTimeCapAttempts >= config.maxPostTimeCapAttempts) {
+            logger.warn(
+                `${postUrl.slice(0, 60)}... hit its post-time-cap ${post.postTimeCapAttempts} times ` +
+                "without finishing — giving up and marking done. Some of this post's reactors may " +
+                "never have been checked.",
+            );
+            status = "done";
+        }
+    } else if (status === "done") {
+        // Reset so a post that later gets manually reset to "pending" (e.g.
+        // by deleting posts.json) doesn't inherit a stale attempt count.
+        post.postTimeCapAttempts = 0;
     }
 
     if (status !== undefined) post.status = status;

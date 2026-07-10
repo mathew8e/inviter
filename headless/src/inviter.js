@@ -341,14 +341,17 @@ async function runPageWorkflow(page, opts) {
             // Mark this post as done (dry runs are still marked done so we
             // don't re-scan them every day; delete posts.json to rescan) —
             // UNLESS it hit its own per-post time cap without finishing the
-            // full reactor list (see reactions.js's `postTimeCapMs`). That
-            // post still has un-scanned reactors; marking it "done" would
-            // orphan them forever, the same bug just fixed for posts that
-            // never got a turn at all (see the pending-post retry fix above).
+            // full reactor list (see reactions.js's `postTimeCapMs`), in
+            // which case it stays "pending" for a retry EXCEPT after
+            // config.maxPostTimeCapAttempts repeated failures, at which
+            // point markPostStatus gives up on it and forces "done" anyway
+            // — see config.js's maxPostTimeCapAttempts comment for why a
+            // post can hit this cap forever without a give-up mechanism.
             scraper.markPostStatus(post.url, {
                 status: result.reason === "post_time_cap" ? "pending" : "done",
                 invitedCount: dryRun ? 0 : result.invited,
                 error: null,
+                hitPostTimeCap: result.reason === "post_time_cap",
             });
 
             rateLimiter.resetErrorCounter();
