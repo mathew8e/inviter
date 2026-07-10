@@ -216,7 +216,7 @@ async function runSinglePost(page, url, dryRun, selectors) {
  * @returns {Promise<object>} summary
  */
 async function runPageWorkflow(page, opts) {
-    const { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors, sinceDate } = opts;
+    const { pageUrl, dryRun, dateFrom, dateTo, maxPosts, selectors, sinceDate, discoveryOnlyMode } = opts;
     const effectiveSinceDate = sinceDate ?? config.discoverSinceDate;
 
     const summary = {
@@ -227,46 +227,49 @@ async function runPageWorkflow(page, opts) {
         results: [],
     };
 
-    // ── Two-phase backlog strategy: discovery-only until the full target
-    // date range has been catalogued, THEN switch to normal invite
-    // processing. Confirmed live (2026-07-10): a single giant continuous
-    // backfill session doesn't work — the Content Library table has a
-    // hard per-session pagination ceiling (~80 scrolls, reproduced twice
-    // regardless of patience). But ordinary short sessions genuinely do
-    // make forward progress each time (a fresh session gets a fresh
-    // ceiling) — the real problem was that regular runs were splitting
-    // their limited time between discovery AND invite-processing,
-    // starving discovery exactly when the "already seen" pile got large
-    // enough to need it most (confirmed: 9 of 11 runs on 2026-07-10 found
-    // 0 new posts). Rather than guess at a fixed time split, check
-    // whether discovery has actually reached the target date yet (oldest
-    // known post vs discoverSinceDate) and dedicate the WHOLE run to
-    // discovery until it has — then it switches itself back to normal
-    // behavior automatically. No manual toggling, no separate cron
-    // entries, self-terminating.
-    const existingPosts = scraper.loadPostList().posts;
-    const oldestKnownDate = existingPosts
-        .map((p) => p.date)
-        .filter((d) => d && d !== "unknown")
-        .sort()[0];
-    const discoveryComplete = oldestKnownDate && oldestKnownDate <= effectiveSinceDate;
+    // ── Opt-in two-phase backlog mode (--discovery-only-until-complete):
+    // dedicates the WHOLE run to discovery (skipping invite-processing
+    // entirely) until the full target date range has been catalogued.
+    // Deliberately opt-in, NOT automatic — an earlier version made this
+    // the default for every run, which meant every single regular cron
+    // invocation became discovery-only and NO invites were sent at all
+    // until the backlog was fully discovered (confirmed live 2026-07-10:
+    // discovery can go multiple runs finding 0 new posts, so this could
+    // pause invites for an unpredictable, possibly long stretch — directly
+    // wrong given the goal was to keep invites flowing). The user's actual
+    // intent was a mode they trigger manually for a dedicated discovery
+    // session (e.g. `./run.sh --dry-run --discovery-only-until-complete`),
+    // not a silent change to the automated schedule. Regular cron runs
+    // (this flag unset) behave exactly as before: a small discovery pass
+    // every run (config.discoveryTimeCapMs) plus invite-processing, so
+    // invites never stop flowing.
+    if (discoveryOnlyMode) {
+        const existingPosts = scraper.loadPostList().posts;
+        const oldestKnownDate = existingPosts
+            .map((p) => p.date)
+            .filter((d) => d && d !== "unknown")
+            .sort()[0];
+        const discoveryComplete = oldestKnownDate && oldestKnownDate <= effectiveSinceDate;
 
-    if (!discoveryComplete) {
+        if (!discoveryComplete) {
+            logger.info(
+                `--discovery-only-until-complete: not yet complete (oldest known post: ` +
+                `${oldestKnownDate || "none"}, target: ${effectiveSinceDate}) — this run is ` +
+                "discovery-only, no invites will be sent.",
+            );
+            const discovered = await scraper.discoverPostsFromContentLibrary(
+                page, dateFrom, dateTo, 5000, effectiveSinceDate, config.discoveryOnlyTimeCapMs,
+            );
+            summary.postsDiscovered = discovered.length;
+            summary.stoppedReason = "discovery_only_phase";
+            return summary;
+        }
+
         logger.info(
-            `Discovery not yet complete (oldest known post: ${oldestKnownDate || "none"}, target: ` +
-            `${effectiveSinceDate}) — this run is discovery-only, no invites will be sent.`,
+            `--discovery-only-until-complete: already complete (oldest known post ${oldestKnownDate} <= ` +
+            `target ${effectiveSinceDate}) — proceeding to normal invite processing.`,
         );
-        const discovered = await scraper.discoverPostsFromContentLibrary(
-            page, dateFrom, dateTo, 5000, effectiveSinceDate, config.discoveryOnlyTimeCapMs,
-        );
-        summary.postsDiscovered = discovered.length;
-        summary.stoppedReason = "discovery_only_phase";
-        return summary;
     }
-
-    logger.info(
-        `Discovery complete (oldest known post ${oldestKnownDate} <= target ${effectiveSinceDate}) — normal mode.`,
-    );
 
     // ── Phase 1: Discover posts via the Professional Dashboard's Content
     // Library (primary method — never loads video/reel players, gives a
@@ -446,6 +449,7 @@ async function runPageWorkflow(page, opts) {
  * @param {string} [options.dateTo] - ISO date or "all" (defaults to config.dateTo)
  * @param {number} [options.maxPosts] - Max posts to process this run (defaults to config.maxPostsPerRun)
  * @param {string} [options.sinceDate] - Absolute ISO date the Content Library scan reaches back to (defaults to config.discoverSinceDate)
+ * @param {boolean} [options.discoveryOnlyMode=false] - Opt-in: dedicate the whole run to discovery (no invites) until discoverSinceDate has been fully reached
  * @param {Array<string>} [options.selectors] - Override invite selectors (e.g. reactions.TEST_SELECTORS)
  * @returns {Promise<object>} summary - { postsDiscovered, postsProcessed, totalInvited, stoppedReason, results }
  */
@@ -460,6 +464,7 @@ async function runWithBrowser({
     dateTo = config.dateTo,
     maxPosts = config.maxPostsPerRun,
     sinceDate = config.discoverSinceDate,
+    discoveryOnlyMode = false,
     selectors = reactions.INVITE_SELECTORS,
 } = {}) {
     const isLoginMode = waitForLogin === true;
@@ -534,7 +539,7 @@ async function runWithBrowser({
 
         if (pageUrl) {
             // ── Full page workflow ──
-            summary = await runPageWorkflow(page, { pageUrl, dryRun, dateFrom, dateTo, maxPosts, sinceDate, selectors });
+            summary = await runPageWorkflow(page, { pageUrl, dryRun, dateFrom, dateTo, maxPosts, sinceDate, discoveryOnlyMode, selectors });
         } else if (url) {
             // ── Single-post legacy/testing mode ──
             const result = await runSinglePost(page, url, dryRun, selectors);

@@ -65,6 +65,15 @@ async function main() {
             default: config.discoverSinceDate,
             describe: "Absolute ISO date (YYYY-MM-DD) the Content Library scan reaches back to (older posts are out of scope)",
         })
+        .option("discovery-only-until-complete", {
+            type: "boolean",
+            default: false,
+            describe:
+                "Opt-in: dedicate this run entirely to discovery (no invites sent) until --discover-since " +
+                "has been fully reached. Intended for a manually-triggered dedicated backfill session, " +
+                "NOT for regular cron use — leaving this off (the default) is what keeps invites flowing " +
+                "every run.",
+        })
         .option("rate-mode", {
             type: "string",
             choices: ["paranoid", "moderate", "aggressive"],
@@ -111,6 +120,7 @@ async function main() {
             dateTo: argv["date-to"],
             maxPosts: argv["max-posts"],
             sinceDate: argv["discover-since"],
+            discoveryOnlyMode: argv["discovery-only-until-complete"],
             selectors,
         });
 
