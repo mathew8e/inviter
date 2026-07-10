@@ -87,6 +87,14 @@ if (process.env.DAILY_MAX_OVERRIDE) {
 if (process.env.PER_POST_MAX_OVERRIDE) {
     rateMode.perPostMax = parseInt(process.env.PER_POST_MAX_OVERRIDE, 10);
 }
+// Lets a one-off run be pointed almost entirely at discovery (see
+// DISCOVERY_TIME_CAP_MS) by forcing the invite-processing phase to exit
+// on its first budget check instead of running for the mode's normal
+// 20-45 minutes — used for dedicated backfill-cataloging runs that
+// shouldn't spend any of their time opening reactions dialogs.
+if (process.env.RUN_TIME_CAP_OVERRIDE) {
+    rateMode.runTimeCapMs = parseInt(process.env.RUN_TIME_CAP_OVERRIDE, 10);
+}
 
 // ──────────────────────────────────────────────
 // Paths
