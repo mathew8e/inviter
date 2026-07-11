@@ -277,8 +277,16 @@ async function runPageWorkflow(page, opts) {
     // up front so we can skip them instead of attempting a doomed
     // reactions-dialog open). Navigates there directly; no need to visit
     // the public page URL first.
+    //
+    // Routine discovery only needs to catch posts published since the last
+    // run, not re-confirm the entire history back to effectiveSinceDate
+    // every time — the deep backlog is caught up via the opt-in
+    // --discovery-only-until-complete mode. Scanning only a recent window
+    // keeps every regular cron run fast (see routineDiscoveryWindowDays).
+    const routineSinceDate = new Date(Date.now() - config.routineDiscoveryWindowDays * 86400000)
+        .toISOString().slice(0, 10);
     const discovered = await scraper.discoverPostsFromContentLibrary(
-        page, dateFrom, dateTo, maxPosts, effectiveSinceDate, config.discoveryTimeCapMs,
+        page, dateFrom, dateTo, maxPosts, routineSinceDate, config.discoveryTimeCapMs,
     );
     summary.postsDiscovered = discovered.length;
 

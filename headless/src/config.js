@@ -147,7 +147,23 @@ const config = Object.freeze({
     // seen" backlog grows over the multi-day catch-up. Only used once
     // discovery has already reached discoverSinceDate (see
     // discoveryOnlyTimeCapMs for the phase before that).
-    discoveryTimeCapMs: parseInt(process.env.DISCOVERY_TIME_CAP_MS || "600000", 10),
+    // Cut from 600000 (10min) to 120000 (2min) on 2026-07-11 now that the
+    // deep backlog has been fully backfilled (see routineDiscoveryWindowDays
+    // below) — routine discovery only scans the last couple of days now,
+    // so it should never legitimately need anywhere near 10 minutes; this
+    // is just a safety net against a genuinely stuck scroll.
+    discoveryTimeCapMs: parseInt(process.env.DISCOVERY_TIME_CAP_MS || "120000", 10),
+
+    // Once the deep backlog is fully catalogued, routine per-run discovery
+    // (the small pass every normal cron run does before invite processing)
+    // only needs to catch posts published since the last run — re-scanning
+    // all the way back to discoverSinceDate every single run wastes the
+    // whole discoveryTimeCapMs budget confirming "0 new" against already-
+    // known history (confirmed live 2026-07-11, right after the Oct 2025
+    // backfill completed). Narrows the routine scan to a recent window
+    // instead; the full discoverSinceDate range is still used by the
+    // opt-in --discovery-only-until-complete backfill mode.
+    routineDiscoveryWindowDays: parseInt(process.env.ROUTINE_DISCOVERY_WINDOW_DAYS || "2", 10),
 
     // Wall-clock cap (ms) for a "discovery-only" run — used automatically
     // by runPageWorkflow while the oldest known post is still newer than
