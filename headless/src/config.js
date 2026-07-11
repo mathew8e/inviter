@@ -29,8 +29,15 @@ const RATE_MODES = {
         // plausibly watch), scroll timing is indistinguishable from normal
         // browsing, so there's no account-risk tradeoff in speeding it up —
         // only a correctness one (not giving Facebook's lazy-loader enough
-        // time to render new rows).
-        scrollDelayMs: 500,
+        // time to render new rows). Trimmed again 2026-07-11 to 300ms — this
+        // is close to the floor: it's a wait for FACEBOOK'S SERVER to push
+        // the next batch of reactors, not for our own scroll animation (that
+        // part is now a separate, purely cosmetic smooth-scroll — see
+        // reactions.js scrollAndInvite Step 3). Going much lower risks
+        // scanning before new rows exist yet, which silently skips
+        // reactors in the virtualized list (root-caused and fixed once
+        // already, 2026-07-03).
+        scrollDelayMs: 300,
         postCooldownMs: 30000,
         errorCooldownHours: 48,
         maxPostsPerRun: 5,
@@ -41,7 +48,7 @@ const RATE_MODES = {
         perPostMax: 75,
         baseDelayMs: 3000,
         randomExtraMs: 3000,
-        scrollDelayMs: 333,
+        scrollDelayMs: 200,
         postCooldownMs: 15000,
         errorCooldownHours: 24,
         maxPostsPerRun: 10,
@@ -52,7 +59,7 @@ const RATE_MODES = {
         perPostMax: 150,
         baseDelayMs: 1500,
         randomExtraMs: 1500,
-        scrollDelayMs: 166,
+        scrollDelayMs: 120,
         postCooldownMs: 5000,
         errorCooldownHours: 12,
         maxPostsPerRun: 20,

@@ -682,7 +682,7 @@ async function scrollAndInvite(
         }
 
         // ── Step 3: Scroll the reactions list to load more users ──
-        const scrollResult = await page.evaluate(() => {
+        const scrollResult = await page.evaluate(async () => {
             const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter(d => {
                 const s = window.getComputedStyle(d);
                 return s.display !== "none" && s.visibility !== "hidden";
@@ -700,10 +700,20 @@ async function scrollAndInvite(
                 const container = scrollables[0];
                 const heightBefore = container.scrollHeight;
                 const before = container.scrollTop;
-                // Smaller step (was 0.8x) so consecutive scans overlap more —
-                // a full-height jump risks skipping rows that finish
-                // rendering between two scans on a fast-loading list.
-                container.scrollBy(0, container.clientHeight * 0.5);
+                // Total distance per iteration is still capped at 0.5x (was 0.8x —
+                // a full-height jump risks skipping rows that finish rendering
+                // between two scans on a fast-loading list). Spreading that same
+                // distance over a handful of quick sub-steps instead of one jump
+                // just makes the motion glide continuously, like a held
+                // middle-click autoscroll, rather than visibly teleporting —
+                // purely cosmetic, doesn't change the distance-per-scan safety
+                // margin the 0.5x cap protects.
+                const STEPS = 6;
+                const stepSize = (container.clientHeight * 0.5) / STEPS;
+                for (let i = 0; i < STEPS; i++) {
+                    container.scrollBy(0, stepSize);
+                    await new Promise((r) => setTimeout(r, 12));
+                }
 
                 // atBottom: we've reached the end of the scroll container
                 const atBottom =

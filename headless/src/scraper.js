@@ -427,10 +427,10 @@ async function scrollContentLibraryTable(page) {
     const before = await countRows();
     await page.mouse.move(640, 500);
 
-    const MAX_TICKS = 30; // ~5s worst case — matches the reactions-dialog patience budget
+    const MAX_TICKS = 30; // ~3s worst case — matches the reactions-dialog patience budget
     for (let i = 0; i < MAX_TICKS; i++) {
         await page.mouse.wheel({ deltaY: 1500 });
-        await new Promise((r) => setTimeout(r, 166));
+        await new Promise((r) => setTimeout(r, 100));
         if ((await countRows()) > before) return true;
     }
     return false;
