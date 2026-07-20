@@ -391,6 +391,15 @@ async function scrollAndInvite(
     let invitesSent = 0;
     let scrollsWithoutNew = 0;
     let totalIterations = 0;
+    // How many INDEPENDENT end-of-list confirmation cycles have concluded
+    // "stalled" in a row. Confirmed live (2026-07-20): a single confirmation
+    // cycle (5 patience retries) isn't always reliable — one post's scan
+    // declared "end of list" after finding only 7 of what turned out to be
+    // 20 real reactors, while a fresh re-run of the same post found the
+    // rest. A second independent cycle (fresh scan+scroll, not just another
+    // wait) catches that kind of transient stall before committing to "done".
+    let endOfListConfirmations = 0;
+    const REQUIRED_END_OF_LIST_CONFIRMATIONS = 2;
     const postStart = Date.now();
     // Long runs of already-followed reactors (e.g. a politician who has
     // manually invited people for years) can produce hundreds of
@@ -549,6 +558,7 @@ async function scrollAndInvite(
         // ── Step 2: Click each button one at a time with visual preview ──
         if (buttonsFound.uninvitedCount > 0) {
             scrollsWithoutNew = 0;
+            endOfListConfirmations = 0;
             let clickedThisRound = 0;
             const maxToClick = Math.min(buttonsFound.uninvitedCount, maxInvites - invitesSent);
 
@@ -769,6 +779,7 @@ async function scrollAndInvite(
                 if (heightAfter > scrollResult.scrollHeight) {
                     logger.info(`New rows loaded after scroll (${scrollResult.scrollHeight} → ${heightAfter}px). Continuing.`);
                     stillStalled = false;
+                    endOfListConfirmations = 0;
                     break;
                 }
                 await new Promise((r) => setTimeout(r, delay));
@@ -776,12 +787,33 @@ async function scrollAndInvite(
             if (stillStalled) {
                 const finalHeight = await getScrollHeight();
                 if (finalHeight <= scrollResult.scrollHeight) {
+                    endOfListConfirmations++;
+                    // A single confirmation cycle isn't enough — confirmed
+                    // live (2026-07-20): a post whose scan declared "end of
+                    // list" after 7 invites turned out to have 20 real
+                    // candidates; a completely independent fresh re-scan
+                    // found the other 13. Rather than trusting this one
+                    // cycle, cool off and run a second, fully independent
+                    // scan+scroll pass (not just another wait) before
+                    // truly committing to "done".
+                    if (endOfListConfirmations < REQUIRED_END_OF_LIST_CONFIRMATIONS) {
+                        logger.info(
+                            `Possible end of list (confirmation ${endOfListConfirmations}/` +
+                            `${REQUIRED_END_OF_LIST_CONFIRMATIONS}) — cooling off 15s for an ` +
+                            "independent recheck before concluding.",
+                        );
+                        await new Promise((r) => setTimeout(r, 15000));
+                        continue;
+                    }
                     logger.info(
-                        `End of list confirmed: at scroll bottom, no new rows loaded through ${retryDelaysMs.length} patience retries, no pending buttons. Done.`,
+                        `End of list confirmed: at scroll bottom, no new rows loaded through ` +
+                        `${REQUIRED_END_OF_LIST_CONFIRMATIONS} independent confirmation cycles, ` +
+                        "no pending buttons. Done.",
                     );
                     break;
                 }
                 logger.info(`New rows loaded after scroll (${scrollResult.scrollHeight} → ${finalHeight}px). Continuing.`);
+                endOfListConfirmations = 0;
             }
         }
     }
