@@ -238,6 +238,12 @@ function renderPage(data) {
   ${data.rateState.isCooldown ? `<div class="cooldown">⚠️ Ochranná pauza do ${esc(fmtTime(data.rateState.cooldownUntil))} — chyby po sobě: ${data.rateState.consecutiveErrors}</div>` : ""}
 
   <section>
+    <h2>Živý náhled <span id="live-shot-status" style="font-weight:normal;color:#999;font-size:12px;"></span></h2>
+    <img id="live-shot" alt="live screenshot" style="max-width:100%;border-radius:6px;border:1px solid #eee;display:none;" />
+    <div id="live-shot-empty" class="empty">Momentálně žádný běh — náhled není k dispozici.</div>
+  </section>
+
+  <section>
     <h2>Příspěvky (zobrazeno ${data.totalPosts} — ${data.storyCount} Story repostů skryto, nemají dialog reakcí)</h2>
     ${data.postRows.length === 0 ? '<div class="empty">Zatím nebyly nalezeny žádné příspěvky.</div>' : `
     <table>
@@ -303,6 +309,30 @@ function renderPage(data) {
     }
     pollLog();
     setInterval(pollLog, 3000);
+
+    // Polls the live screenshot every 2s. Uses a throwaway Image() to
+    // pre-load before swapping the visible <img> src, so the panel never
+    // flashes a broken-image icon between frames.
+    const shotImg = document.getElementById("live-shot");
+    const shotEmpty = document.getElementById("live-shot-empty");
+    const shotStatus = document.getElementById("live-shot-status");
+    function pollShot() {
+      const test = new Image();
+      test.onload = () => {
+        shotImg.src = test.src;
+        shotImg.style.display = "";
+        shotEmpty.style.display = "none";
+        shotStatus.textContent = "aktualizováno " + new Date().toLocaleTimeString("cs-CZ");
+      };
+      test.onerror = () => {
+        shotImg.style.display = "none";
+        shotEmpty.style.display = "";
+        shotStatus.textContent = "";
+      };
+      test.src = "/live-screenshot.jpg?t=" + Date.now();
+    }
+    pollShot();
+    setInterval(pollShot, 2000);
   </script>
 </body>
 </html>`;
@@ -321,6 +351,17 @@ const server = http.createServer((req, res) => {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: err.message }));
         }
+        return;
+    }
+
+    if (req.url.startsWith("/live-screenshot.jpg")) {
+        if (!fs.existsSync(config.liveScreenshotPath)) {
+            res.writeHead(404);
+            res.end();
+            return;
+        }
+        res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "no-store" });
+        fs.createReadStream(config.liveScreenshotPath).pipe(res);
         return;
     }
 

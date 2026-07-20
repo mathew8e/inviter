@@ -219,6 +219,11 @@ const config = Object.freeze({
     lockFilePath: path.join(DATA_DIR, "inviter.lock"),
     screenshotsDir:
         process.env.SCREENSHOTS_DIR || path.join(DATA_DIR, "screenshots"),
+    // Single file, overwritten every tick — a cheap near-live view of what
+    // the browser is doing, shown on the dashboard (no video/ffmpeg needed).
+    liveScreenshotPath:
+        process.env.LIVE_SCREENSHOT_PATH || path.join(DATA_DIR, "live-screenshot.jpg"),
+    liveScreenshotIntervalMs: parseInt(process.env.LIVE_SCREENSHOT_INTERVAL_MS || "2000", 10),
 
     // ── Browser ──
     headless: process.env.HEADLESS !== "false",

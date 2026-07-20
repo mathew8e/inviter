@@ -32,7 +32,7 @@ const auth = require("./auth");
 const scraper = require("./scraper");
 const reactions = require("./reactions");
 const rateLimiter = require("./rate-limiter");
-const { takeScreenshot } = require("./screenshot");
+const { takeScreenshot, startLiveScreenshotLoop } = require("./screenshot");
 
 // ──────────────────────────────────────────────
 // Browser / page helpers
@@ -482,6 +482,7 @@ async function runWithBrowser({
 
     let lockHeld = false;
     let cleanupDone = false;
+    let stopLiveScreenshot = () => {};
     let summary = {
         postsDiscovered: 0,
         postsProcessed: 0,
@@ -495,6 +496,7 @@ async function runWithBrowser({
         if (cleanupDone) return;
         cleanupDone = true;
         logger.info(`Cleaning up (reason: ${reason})...`);
+        stopLiveScreenshot();
         if (lockHeld) {
             rateLimiter.releaseLock();
             lockHeld = false;
@@ -520,6 +522,7 @@ async function runWithBrowser({
         await page.setUserAgent(config.userAgent);
         await page.setViewport({ width: 1280, height: 900 });
         await blockUnnecessaryResources(page);
+        stopLiveScreenshot = startLiveScreenshotLoop(page);
 
         // ── Login mode: open facebook.com, wait for the user, then exit ──
         if (isLoginMode) {
