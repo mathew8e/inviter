@@ -123,7 +123,9 @@ function gatherData() {
         postsByStatus,
         storyCount,
         totalPosts: posts.length,
-        postRows: postRows.slice(0, 30),
+        // Was capped at the 30 most-recently-processed posts — user wants
+        // the full history visible, not just recent activity (2026-07-20).
+        postRows,
         totalInvitedAllTime,
         warningsAndErrors,
         scrapedAt: postList.scrapedAt,
