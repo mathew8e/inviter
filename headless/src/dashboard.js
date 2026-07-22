@@ -107,6 +107,9 @@ function gatherData() {
         const totalInvited = runs.reduce((sum, r) => sum + (r.invitedCount || 0), 0);
         return { ...p, runs, totalInvited };
     });
+    // Sorting/pagination now happens at render time based on the requested
+    // column, so leave this in a stable default order (most recently
+    // touched first) here.
     postRows.sort((a, b) => (b.processedAt || 0) - (a.processedAt || 0));
 
     const postsByStatus = { pending: 0, done: 0, error: 0 };
@@ -167,11 +170,90 @@ function contentTypeLabel(contentType) {
     return contentType === "story" ? "Story" : "Příspěvek";
 }
 
-function renderPage(data) {
+// Raw internal reason codes (e.g. "loop_exit", "post_time_cap") translated
+// into plain-language Czech — these were previously shown as-is, which the
+// page owner flagged as unreadable jargon (2026-07-22).
+const STOP_REASON_LABELS_CZ = {
+    loop_exit: "Dokončeno — celý seznam reakcí projit",
+    no_more_users: "Dokončeno — už žádní další uživatelé",
+    post_time_cap: "Časový limit příspěvku — zbytek se dokončí příště",
+    dialog_not_opened: "Nepodařilo se otevřít dialog reakcí",
+    no_container_found: "Nenalezen posouvatelný seznam reakcí",
+    no_budget: "Vyčerpán denní limit pozvánek",
+    per_post_limit: "Dosažen limit pozvánek pro tento příspěvek",
+    story_not_supported: "Story repost — nepodporováno (duplicitní obsah)",
+    run_time_cap: "Časový limit celého běhu",
+    rate_limited: "Facebook omezil rychlost — pauza",
+    session_expired: "Vypršelo přihlášení",
+    discovery_only_phase: "Pouze vyhledávání příspěvků (bez pozvánek)",
+    error: "Chyba",
+};
+
+function stopReasonLabel(reason) {
+    if (!reason) return "—";
+    return STOP_REASON_LABELS_CZ[reason] || reason;
+}
+
+const RATE_MODE_LABELS_CZ = { paranoid: "opatrný", moderate: "střední", aggressive: "rychlý" };
+
+function rateModeLabel(mode) {
+    if (!mode) return "—";
+    return RATE_MODE_LABELS_CZ[mode] || mode;
+}
+
+// ──────────────────────────────────────────────
+// Sorting / pagination
+// ──────────────────────────────────────────────
+
+const PAGE_SIZE = 10;
+
+const SORT_GETTERS = {
+    date: (p) => p.date || "",
+    type: (p) => contentTypeLabel(p.contentType),
+    status: (p) => p.status || "",
+    invited: (p) => p.totalInvited || 0,
+    runs: (p) => p.runs.length || 0,
+    processed: (p) => p.processedAt || 0,
+};
+
+function sortPostRows(rows, sortKey, dir) {
+    const getter = SORT_GETTERS[sortKey] || SORT_GETTERS.processed;
+    return rows.slice().sort((a, b) => {
+        const av = getter(a);
+        const bv = getter(b);
+        if (av < bv) return dir === "asc" ? -1 : 1;
+        if (av > bv) return dir === "asc" ? 1 : -1;
+        return 0;
+    });
+}
+
+function paginate(rows, page) {
+    const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    const safePage = Math.min(Math.max(1, page), totalPages);
+    const start = (safePage - 1) * PAGE_SIZE;
+    return { pageRows: rows.slice(start, start + PAGE_SIZE), totalPages, safePage };
+}
+
+function renderPage(data, query = {}) {
     const budgetPct = Math.min(
         100,
         Math.round((data.rateState.invitesToday / (data.rateState.dailyLimit || 1)) * 100),
     );
+
+    const sortKey = SORT_GETTERS[query.sort] ? query.sort : "processed";
+    const sortDir = query.dir === "asc" ? "asc" : "desc";
+    const requestedPage = parseInt(query.page, 10) || 1;
+    const sortedRows = sortPostRows(data.postRows, sortKey, sortDir);
+    const { pageRows, totalPages, safePage } = paginate(sortedRows, requestedPage);
+
+    // Builds a link that preserves the other params and toggles direction
+    // when clicking the column already being sorted by.
+    const sortLink = (key, label) => {
+        const nextDir = sortKey === key && sortDir === "asc" ? "desc" : "asc";
+        const arrow = sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : "";
+        return `<a href="?sort=${key}&dir=${nextDir}&page=1" style="color:inherit;">${esc(label)}${arrow}</a>`;
+    };
+    const pageLink = (p) => `?sort=${sortKey}&dir=${sortDir}&page=${p}`;
 
     return `<!DOCTYPE html>
 <html lang="cs">
@@ -200,6 +282,10 @@ function renderPage(data) {
   .badge-idle { background:#666; color:#fff; padding:3px 10px; border-radius:10px; font-size:12px; }
   .cooldown { background:#fff3cd; color:#856404; padding:8px 12px; border-radius:6px; font-size:13px; margin-bottom:12px; }
   .empty { color: #999; font-size: 13px; padding: 8px 0; }
+  .hint { color: #999; font-size: 12px; margin-bottom: 10px; }
+  .pager { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 13px; color: #666; }
+  .pager a { font-weight: 500; }
+  .pager-disabled { color: #ccc; }
   a { color: #1a73e8; text-decoration: none; }
 </style>
 </head>
@@ -244,11 +330,20 @@ function renderPage(data) {
   </section>
 
   <section>
-    <h2>Příspěvky (zobrazeno ${data.totalPosts} — ${data.storyCount} Story repostů skryto, nemají dialog reakcí)</h2>
+    <h2>Příspěvky (celkem ${data.totalPosts} — ${data.storyCount} Story repostů skryto, nemají dialog reakcí)</h2>
+    <div class="hint">Klikněte na název sloupce pro řazení. „Běhy" = kolikrát nástroj tento příspěvek zpracoval; šipka ▸ rozbalí historii jednotlivých běhů.</div>
     ${data.postRows.length === 0 ? '<div class="empty">Zatím nebyly nalezeny žádné příspěvky.</div>' : `
     <table>
-      <tr><th></th><th>Datum</th><th>Typ</th><th>Stav</th><th>Pozváno celkem</th><th>Běhy</th><th>Odkaz</th></tr>
-      ${data.postRows.map((p) => `
+      <tr>
+        <th></th>
+        <th>${sortLink("date", "Datum")}</th>
+        <th>${sortLink("type", "Typ")}</th>
+        <th>${sortLink("status", "Stav")}</th>
+        <th>${sortLink("invited", "Pozváno celkem")}</th>
+        <th>${sortLink("runs", "Běhy")}</th>
+        <th>Odkaz</th>
+      </tr>
+      ${pageRows.map((p) => `
       <tr>
         <td>${p.runs.length > 0 ? `<button onclick="this.closest('tr').nextElementSibling.style.display = this.closest('tr').nextElementSibling.style.display === 'none' ? '' : 'none';" style="cursor:pointer;border:none;background:none;font-size:14px;">▸</button>` : ""}</td>
         <td>${esc(p.date)}</td>
@@ -263,19 +358,26 @@ function renderPage(data) {
         <td colspan="6">
           ${p.runs.length === 0 ? '<span class="empty">Pro tento příspěvek zatím nejsou zaznamenány žádné běhy.</span>' : `
           <table>
-            <tr><th>Kdy</th><th>Pozváno</th><th>Režim</th><th>Zkušební běh</th><th>Důvod ukončení</th></tr>
+            <tr><th>Kdy</th><th>Pozváno</th><th>Rychlost</th><th>Zkušební běh (bez odeslání)</th><th>Výsledek</th></tr>
             ${p.runs.map((r) => `
             <tr>
               <td>${esc(fmtTime(r.ts))}</td>
               <td>${r.invitedCount || 0}</td>
-              <td>${esc(r.rateMode || "—")}</td>
+              <td>${esc(rateModeLabel(r.rateMode))}</td>
               <td>${r.dryRun ? "ano" : "ne"}</td>
-              <td>${esc(r.stoppedReason || "—")}</td>
+              <td>${esc(stopReasonLabel(r.stoppedReason))}</td>
             </tr>`).join("")}
           </table>`}
         </td>
       </tr>`).join("")}
-    </table>`}
+    </table>
+    <div class="pager">
+      <span>Stránka ${safePage} z ${totalPages} (${sortedRows.length} příspěvků)</span>
+      <span>
+        ${safePage > 1 ? `<a href="${pageLink(safePage - 1)}">‹ Předchozí</a>` : '<span class="pager-disabled">‹ Předchozí</span>'}
+        ${safePage < totalPages ? `<a href="${pageLink(safePage + 1)}">Další ›</a>` : '<span class="pager-disabled">Další ›</span>'}
+      </span>
+    </div>`}
   </section>
 
   <section>
@@ -365,15 +467,17 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    if (req.url !== "/" && req.url !== "/index.html") {
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    if (parsedUrl.pathname !== "/" && parsedUrl.pathname !== "/index.html") {
         res.writeHead(404);
         res.end("Not found");
         return;
     }
     try {
         const data = gatherData();
+        const query = Object.fromEntries(parsedUrl.searchParams);
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(renderPage(data));
+        res.end(renderPage(data, query));
     } catch (err) {
         res.writeHead(500, { "Content-Type": "text/plain" });
         res.end("Dashboard error: " + err.message);

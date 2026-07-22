@@ -19,6 +19,23 @@ const logger = require("./src/logger");
 const { gotoAndSettle, forceLightColorScheme, blockUnnecessaryResources } = require("./src/inviter");
 
 (async () => {
+    // Acquire the same lock file the normal cron flow uses. Without this
+    // (confirmed live 2026-07-22), the dashboard wrongly shows "idle" during
+    // a resweep, and cron keeps trying to launch a second Chrome instance
+    // every 2 hours — Chrome's own profile lock caught it every time (no
+    // corruption happened), but it silently blocked all routine discovery
+    // and invite processing for the run's entire duration.
+    rateLimiter.acquireLock();
+    let lockHeld = true;
+    const releaseLock = () => {
+        if (lockHeld) {
+            rateLimiter.releaseLock();
+            lockHeld = false;
+        }
+    };
+    process.once("SIGINT", () => { releaseLock(); process.exit(0); });
+    process.once("SIGTERM", () => { releaseLock(); process.exit(0); });
+
     const opts = session.getLaunchOptions("./profile", "new");
     const browser = await puppeteer.launch(opts);
     const page = await browser.newPage();
@@ -80,4 +97,5 @@ const { gotoAndSettle, forceLightColorScheme, blockUnnecessaryResources } = requ
     );
 
     await browser.close();
+    releaseLock();
 })();
