@@ -93,9 +93,7 @@ function gatherData() {
     // Group invite-history entries by post URL so each post shows ONE row
     // with every run against it nested inside, instead of two separate,
     // hard-to-cross-reference tables (posts.json snapshot vs invitations.json
-    // log). Also makes the invited-count bug (posts.json going stale after
-    // a --url mode run) moot — the total here is summed directly from the
-    // history log, which is always accurate.
+    // log).
     const historyByUrl = new Map();
     for (const h of history) {
         if (!historyByUrl.has(h.postUrl)) historyByUrl.set(h.postUrl, []);
@@ -104,7 +102,13 @@ function gatherData() {
 
     const postRows = posts.map((p) => {
         const runs = (historyByUrl.get(p.url) || []).slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
-        const totalInvited = runs.reduce((sum, r) => sum + (r.invitedCount || 0), 0);
+        // Total comes from posts.json's own invitedCount, NOT summed from the
+        // history log — markPostStatus() runs unconditionally after every
+        // processed post, but storage.saveHistory() was missing entirely
+        // from resweep_done_posts.js for its first full pass (confirmed live
+        // 2026-07-22: real invites were sent and correctly counted here, but
+        // never logged to history), so summing the log alone undercounts.
+        const totalInvited = p.invitedCount || 0;
         return { ...p, runs, totalInvited };
     });
     // Sorting/pagination now happens at render time based on the requested
@@ -118,7 +122,13 @@ function gatherData() {
     }
     const storyCount = allPosts.filter((p) => p.contentType === "story").length;
 
-    const totalInvitedAllTime = history.reduce((sum, h) => sum + (h.invitedCount || 0), 0);
+    // Summed from posts.json's per-post invitedCount, not the history log —
+    // markPostStatus() runs unconditionally after every processed post, but
+    // storage.saveHistory() was missing entirely from resweep_done_posts.js
+    // for its first full pass (confirmed live 2026-07-22: 869 real invites
+    // were sent and correctly counted here, but never logged to history),
+    // so summing history alone silently undercounts.
+    const totalInvitedAllTime = allPosts.reduce((sum, p) => sum + (p.invitedCount || 0), 0);
 
     // A plain-language "what happened recently" feed, newest first — this is
     // what a non-technical reader (the page owner) actually wants to see,
@@ -177,8 +187,9 @@ function gatherStatus() {
     const posts = (postList.posts || []).filter((p) => p.contentType !== "story");
     const postsByStatus = { pending: 0, done: 0, error: 0 };
     for (const p of posts) postsByStatus[p.status] = (postsByStatus[p.status] || 0) + 1;
-    const history = storage.getHistory();
-    const totalInvitedAllTime = history.reduce((sum, h) => sum + (h.invitedCount || 0), 0);
+    // Summed from posts.json's per-post invitedCount — see gatherData()'s
+    // comment for why the history log alone would undercount.
+    const totalInvitedAllTime = posts.reduce((sum, p) => sum + (p.invitedCount || 0), 0);
 
     return {
         runActive: isRunActive(),
