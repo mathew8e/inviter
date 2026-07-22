@@ -165,6 +165,20 @@ const config = Object.freeze({
     // opt-in --discovery-only-until-complete backfill mode.
     routineDiscoveryWindowDays: parseInt(process.env.ROUTINE_DISCOVERY_WINDOW_DAYS || "2", 10),
 
+    // A post marked "done" was only fully clear of uninvited reactors AT
+    // THE MOMENT it was checked — Facebook posts keep collecting new
+    // reactions for days/weeks afterward, and nothing re-opens a "done"
+    // post's reactions dialog to check for people who reacted since. This
+    // was confirmed live (2026-07-22) by the page owner manually finding
+    // dozens/hundreds of un-invited reactors on posts that were already
+    // marked "done" — some as recent as ~24h old. recheckWindowDays/
+    // recheckIntervalMs make "done" posts published within the window
+    // periodically eligible for one more pass, so genuinely new reactions
+    // keep getting caught instead of a post being treated as permanently
+    // finished after its first clean scan.
+    recheckWindowDays: parseInt(process.env.RECHECK_WINDOW_DAYS || "30", 10),
+    recheckIntervalMs: parseInt(process.env.RECHECK_INTERVAL_MS || String(24 * 60 * 60 * 1000), 10),
+
     // Wall-clock cap (ms) for a "discovery-only" run — used automatically
     // by runPageWorkflow while the oldest known post is still newer than
     // discoverSinceDate (i.e. the backlog hasn't been fully catalogued

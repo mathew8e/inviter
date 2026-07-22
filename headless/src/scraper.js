@@ -97,6 +97,34 @@ function filterByDate(posts, dateFrom, dateTo) {
 }
 
 // ──────────────────────────────────────────────
+// isEligibleForProcessing
+// ──────────────────────────────────────────────
+
+/**
+ * A post is eligible for a processing pass if it's still "pending"/"error",
+ * OR if it's "done" but was published within config.recheckWindowDays and
+ * hasn't been checked again in the last config.recheckIntervalMs — Facebook
+ * posts keep collecting new reactions long after their first clean scan, so
+ * a "done" post needs periodic re-checks, not a one-time pass (see
+ * config.js's recheckWindowDays comment for the full reasoning).
+ *
+ * @param {object} post
+ * @param {number} [now]
+ * @returns {boolean}
+ */
+function isEligibleForProcessing(post, now = Date.now()) {
+    if (post.status !== "done") return true;
+    // Stories never have a working reactions dialog (see contentType
+    // comments elsewhere) — they're marked "done" immediately and would
+    // otherwise become "eligible" for a pointless recheck every cycle.
+    if (post.contentType === "story") return false;
+    if (post.date === "unknown") return false;
+    const ageMs = now - new Date(post.date).getTime();
+    if (ageMs > config.recheckWindowDays * 86400000) return false;
+    return !post.processedAt || now - post.processedAt >= config.recheckIntervalMs;
+}
+
+// ──────────────────────────────────────────────
 // mergePostLists
 // ──────────────────────────────────────────────
 
@@ -737,4 +765,5 @@ module.exports = {
     scrollContentLibraryTable,
     filterByDate,
     mergePostLists,
+    isEligibleForProcessing,
 };

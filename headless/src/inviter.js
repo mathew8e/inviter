@@ -312,10 +312,12 @@ async function runPageWorkflow(page, opts) {
     // mattering much either way.
     const allKnownPosts = scraper.loadPostList().posts;
     const pending = allKnownPosts
-        .filter((p) => p.status !== "done")
+        .filter((p) => scraper.isEligibleForProcessing(p))
         .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     logger.info(
-        `${pending.length}/${allKnownPosts.length} known posts are pending (not yet done, oldest first) — ` +
+        `${pending.length}/${allKnownPosts.length} known posts are due a pass (pending, plus any ` +
+        `"done" posts within the ${config.recheckWindowDays}-day recheck window that haven't been ` +
+        `checked in ${Math.round(config.recheckIntervalMs / 3600000)}h; oldest first) — ` +
         `${discovered.length} newly discovered this run.`,
     );
 
