@@ -14,11 +14,14 @@ const auth = require("./src/auth");
 const scraper = require("./src/scraper");
 const reactions = require("./src/reactions");
 const rateLimiter = require("./src/rate-limiter");
+const storage = require("./src/storage");
 const config = require("./src/config");
 const logger = require("./src/logger");
 const { gotoAndSettle, forceLightColorScheme, blockUnnecessaryResources } = require("./src/inviter");
 
 (async () => {
+    await storage.init();
+
     // Acquire the same lock file the normal cron flow uses. Without this
     // (confirmed live 2026-07-22), the dashboard wrongly shows "idle" during
     // a resweep, and cron keeps trying to launch a second Chrome instance
@@ -77,6 +80,18 @@ const { gotoAndSettle, forceLightColorScheme, blockUnnecessaryResources } = requ
                 postsWithNewInvites++;
                 logger.info(`>>> Found ${result.invited} previously-missed reactor(s) on this post.`);
             }
+
+            // Was missing entirely (confirmed live 2026-07-22) — without this,
+            // the resweep's real invites were sent and correctly counted
+            // toward the daily budget, but never showed up in the dashboard's
+            // per-post history or activity feed, since both read from this
+            // log rather than posts.json's running invitedCount.
+            await storage.saveHistory(post.url, result.invited, {
+                stoppedReason: result.reason,
+                rateMode: "aggressive",
+                dryRun: false,
+                resweep: true,
+            });
 
             scraper.markPostStatus(post.url, {
                 status: result.reason === "post_time_cap" ? "pending" : "done",

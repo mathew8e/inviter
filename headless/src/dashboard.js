@@ -120,6 +120,28 @@ function gatherData() {
 
     const totalInvitedAllTime = history.reduce((sum, h) => sum + (h.invitedCount || 0), 0);
 
+    // A plain-language "what happened recently" feed, newest first — this is
+    // what a non-technical reader (the page owner) actually wants to see,
+    // as opposed to the raw log lines underneath. Built from the same
+    // history log the post table's expandable rows use.
+    const dateByUrl = new Map(posts.map((p) => [p.url, p.date]));
+    const recentActivity = history
+        .slice()
+        .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+        .slice(0, 15)
+        .map((h) => ({
+            ts: h.ts,
+            postDate: dateByUrl.get(h.postUrl) || null,
+            invitedCount: h.invitedCount || 0,
+            stoppedReason: h.stoppedReason,
+        }));
+
+    // Rough throughput estimate from the last hour of activity, used to give
+    // a plain-language ETA for the remaining backlog instead of just a bare
+    // pending count with no sense of "how long will this actually take".
+    const oneHourAgo = Date.now() - 3600000;
+    const postsLastHour = history.filter((h) => (h.ts || 0) >= oneHourAgo).length;
+
     return {
         runActive: isRunActive(),
         rateState,
@@ -128,11 +150,23 @@ function gatherData() {
         totalPosts: posts.length,
         postRows,
         totalInvitedAllTime,
+        recentActivity,
+        postsLastHour,
         warningsAndErrors,
         scrapedAt: postList.scrapedAt,
         generatedAt: Date.now(),
         discoveryRange: getDiscoveryRange(),
     };
+}
+
+// Minutes until the next cron tick — the schedule runs every even hour.
+function minutesUntilNextRun() {
+    const now = new Date();
+    const next = new Date(now);
+    next.setMinutes(0, 0, 0);
+    next.setHours(Math.ceil((now.getHours() + (now.getMinutes() > 0 || now.getSeconds() > 0 ? 1 : 0)) / 2) * 2);
+    if (next <= now) next.setHours(next.getHours() + 2);
+    return Math.max(0, Math.round((next - now) / 60000));
 }
 
 /** Small subset of gatherData() used for the live-polled header/cards — kept
@@ -168,6 +202,39 @@ function esc(s) {
 function fmtTime(ts) {
     if (!ts) return "—";
     return new Date(ts).toLocaleString("cs-CZ");
+}
+
+function timeAgo(ts) {
+    if (!ts) return "—";
+    const diffMin = Math.round((Date.now() - ts) / 60000);
+    if (diffMin < 1) return "právě teď";
+    if (diffMin < 60) return `před ${diffMin} min`;
+    const diffHr = Math.round(diffMin / 60);
+    if (diffHr < 24) return `před ${diffHr} h`;
+    return `před ${Math.round(diffHr / 24)} dny`;
+}
+
+function fmtMinutes(min) {
+    if (min < 60) return `${min} min`;
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+// Czech numeral agreement: 1 = singular, 2-4 = "few" plural, 5+ = "many" plural.
+function personCount(n) {
+    if (n === 1) return "1 nový člověk";
+    if (n >= 2 && n <= 4) return `${n} noví lidé`;
+    return `${n} nových lidí`;
+}
+
+function activityLine(entry) {
+    if (entry.invitedCount > 0) return `nalezeno a pozváno ${personCount(entry.invitedCount)}`;
+    if (entry.stoppedReason === "post_time_cap") return "čas vypršel — zbytek se dokončí příště";
+    if (entry.stoppedReason === "dialog_not_opened" || entry.stoppedReason === "no_container_found") {
+        return "nepodařilo se otevřít reakce na tomto příspěvku";
+    }
+    return "nikdo nový k pozvání (buď všichni už stránku sledují, nebo je hotovo)";
 }
 
 function fmtDate(isoDate) {
@@ -278,6 +345,30 @@ function renderPage(data, query = {}) {
     };
     const pageLink = (p) => `?sort=${sortKey}&dir=${sortDir}&page=${p}#posts`;
 
+    // ── Plain-language status story: what's happening now / what's next ──
+    // This is the section a non-technical reader actually wants — the raw
+    // stats and log below exist mostly for debugging, not for answering
+    // "is this working and when will it be done" (2026-07-22).
+    const pendingCount = data.postsByStatus.pending || 0;
+    const nextRunMin = minutesUntilNextRun();
+    let nowSentence;
+    if (data.runActive) {
+        nowSentence = "Právě pracuje — prochází příspěvky a hledá lidi k pozvání.";
+    } else if (pendingCount > 0) {
+        nowSentence = `Momentálně neběží. Čeká ${pendingCount} nezpracovaných příspěvků — příští automatické spuštění za ${fmtMinutes(nextRunMin)}.`;
+    } else {
+        nowSentence = `Momentálně neběží — všechny příspěvky jsou zpracované. Příští kontrola nových příspěvků za ${fmtMinutes(nextRunMin)}.`;
+    }
+
+    let etaSentence = "";
+    if (pendingCount > 0 && data.postsLastHour > 0) {
+        const etaHours = pendingCount / data.postsLastHour;
+        const etaText = etaHours < 1 ? fmtMinutes(Math.round(etaHours * 60)) : `${etaHours.toFixed(1)} h`;
+        etaSentence = `Za poslední hodinu zpracováno ${data.postsLastHour} příspěvků. Při tomto tempu zbývajících ${pendingCount} bude hotovo přibližně za ${etaText}.`;
+    } else if (pendingCount > 0) {
+        etaSentence = `Zbývá ${pendingCount} příspěvků, zatím bez dostatečné aktivity pro odhad času.`;
+    }
+
     return `<!DOCTYPE html>
 <html lang="cs">
 <head>
@@ -368,6 +459,16 @@ function renderPage(data, query = {}) {
 
   .cooldown { background: var(--warn-soft); color: var(--warn); padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-bottom: 16px; border: 1px solid #ecd7b8; }
 
+  .story { background: var(--accent-soft); border: 1px solid #c7e2d9; }
+  .story h2 { font-size: 13px; color: var(--accent); }
+  #story-now { font-size: 16px; font-weight: 600; line-height: 1.4; margin: 4px 0 0; }
+  #story-eta { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .activity-list { list-style: none; margin: 10px 0 0; padding: 0; }
+  .activity-list li { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .activity-list li:first-child { border-top: none; }
+  .activity-when { color: var(--muted); flex-shrink: 0; width: 76px; font-variant-numeric: tabular-nums; }
+  .activity-what b { font-variant-numeric: tabular-nums; }
+
   .warn-line { color: var(--danger); font-family: ui-monospace, Consolas, monospace; font-size: 12px; margin: 2px 0; white-space: pre-wrap; word-break: break-all; }
 
   details.tech summary { cursor: pointer; font-size: 14px; font-weight: 700; list-style: none; display: flex; align-items: center; gap: 8px; }
@@ -413,6 +514,25 @@ function renderPage(data, query = {}) {
   </header>
 
   <main>
+    <section class="story">
+      <h2>Co se právě děje</h2>
+      <p id="story-now">${esc(nowSentence)}</p>
+      ${etaSentence ? `<p id="story-eta">${esc(etaSentence)}</p>` : ""}
+    </section>
+
+    ${data.recentActivity.length > 0 ? `
+    <section>
+      <h2>Co se stalo naposledy</h2>
+      <div class="hint">Posledních ${data.recentActivity.length} kroků, nejnovější první.</div>
+      <ul class="activity-list">
+        ${data.recentActivity.map((a) => `
+        <li>
+          <span class="activity-when">${esc(timeAgo(a.ts))}</span>
+          <span class="activity-what">Příspěvek z ${esc(fmtDate(a.postDate))} — ${esc(activityLine(a))}</span>
+        </li>`).join("")}
+      </ul>
+    </section>` : ""}
+
     <div class="cards">
       <div class="card">
         <div class="label">Dnešní pozvánky</div>
