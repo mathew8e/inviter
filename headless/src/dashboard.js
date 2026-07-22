@@ -699,7 +699,7 @@ function renderPage(data, query = {}) {
       const test = new Image();
       test.onload = () => {
         shotImg.src = test.src;
-        shotImg.style.display = "";
+        shotImg.style.display = "block";
         shotEmpty.style.display = "none";
         shotStatus.textContent = "aktualizováno " + new Date().toLocaleTimeString("cs-CZ");
       };
