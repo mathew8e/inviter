@@ -103,10 +103,13 @@ function filterByDate(posts, dateFrom, dateTo) {
 /**
  * A post is eligible for a processing pass if it's still "pending"/"error",
  * OR if it's "done" but was published within config.recheckWindowDays and
- * hasn't been checked again in the last config.recheckIntervalMs — Facebook
- * posts keep collecting new reactions long after their first clean scan, so
- * a "done" post needs periodic re-checks, not a one-time pass (see
- * config.js's recheckWindowDays comment for the full reasoning).
+ * is due another look — Facebook posts keep collecting new reactions long
+ * after their first clean scan, so a "done" post needs periodic re-checks,
+ * not a one-time pass (see config.js's recheckWindowDays comment for the
+ * full reasoning). Two-tier schedule: near-every-cron-cycle while the post
+ * is still within recheckFastWindowDays of publication (most new reactions
+ * land here), tapering to once every recheckIntervalMs for the rest of
+ * recheckWindowDays.
  *
  * @param {object} post
  * @param {number} [now]
@@ -121,7 +124,10 @@ function isEligibleForProcessing(post, now = Date.now()) {
     if (post.date === "unknown") return false;
     const ageMs = now - new Date(post.date).getTime();
     if (ageMs > config.recheckWindowDays * 86400000) return false;
-    return !post.processedAt || now - post.processedAt >= config.recheckIntervalMs;
+    const interval = ageMs <= config.recheckFastWindowDays * 86400000
+        ? config.recheckFastIntervalMs
+        : config.recheckIntervalMs;
+    return !post.processedAt || now - post.processedAt >= interval;
 }
 
 // ──────────────────────────────────────────────

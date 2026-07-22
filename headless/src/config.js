@@ -167,15 +167,25 @@ const config = Object.freeze({
 
     // A post marked "done" was only fully clear of uninvited reactors AT
     // THE MOMENT it was checked — Facebook posts keep collecting new
-    // reactions for days/weeks afterward, and nothing re-opens a "done"
-    // post's reactions dialog to check for people who reacted since. This
-    // was confirmed live (2026-07-22) by the page owner manually finding
-    // dozens/hundreds of un-invited reactors on posts that were already
-    // marked "done" — some as recent as ~24h old. recheckWindowDays/
-    // recheckIntervalMs make "done" posts published within the window
-    // periodically eligible for one more pass, so genuinely new reactions
-    // keep getting caught instead of a post being treated as permanently
-    // finished after its first clean scan.
+    // reactions for days afterward, and nothing re-opens a "done" post's
+    // reactions dialog to check for people who reacted since. Confirmed
+    // live (2026-07-22) by the page owner manually finding dozens/hundreds
+    // of un-invited reactors on posts already marked "done", some barely
+    // 24h old — and, per his own observation of this page's engagement
+    // pattern, a post's reactions mostly arrive in its first ~3-4 days
+    // then taper off sharply.
+    //
+    // Two-tier schedule instead of one flat interval: a post is checked
+    // essentially every cron cycle while it's "fresh" (age <=
+    // recheckFastWindowDays), since that's when most new reactions
+    // actually land and missing them for a whole day is the exact problem
+    // being fixed. Past that, it tapers to once every recheckIntervalMs
+    // for the remainder of recheckWindowDays — full-list rescans on a
+    // large, mostly-already-invited reactor list aren't free, so an old
+    // post that's very unlikely to have anything new doesn't need
+    // cron-frequency attention, just an occasional check for stragglers.
+    recheckFastWindowDays: parseInt(process.env.RECHECK_FAST_WINDOW_DAYS || "4", 10),
+    recheckFastIntervalMs: parseInt(process.env.RECHECK_FAST_INTERVAL_MS || String(60 * 60 * 1000), 10),
     recheckWindowDays: parseInt(process.env.RECHECK_WINDOW_DAYS || "30", 10),
     recheckIntervalMs: parseInt(process.env.RECHECK_INTERVAL_MS || String(24 * 60 * 60 * 1000), 10),
 
