@@ -395,15 +395,21 @@ async function runPageWorkflow(page, opts) {
 
             // Mark this post as done (dry runs are still marked done so we
             // don't re-scan them every day; delete posts.json to rescan) —
-            // UNLESS it hit its own per-post time cap without finishing the
-            // full reactor list (see reactions.js's `postTimeCapMs`), in
-            // which case it stays "pending" for a retry EXCEPT after
-            // config.maxPostTimeCapAttempts repeated failures, at which
-            // point markPostStatus gives up on it and forces "done" anyway
-            // — see config.js's maxPostTimeCapAttempts comment for why a
-            // post can hit this cap forever without a give-up mechanism.
+            // UNLESS the pass genuinely didn't reach the end of the reactor
+            // list: "post_time_cap" (its own time budget ran out),
+            // "per_post_limit" (hit maxInvites before the list was
+            // exhausted), or "error_mid_scan" (a Puppeteer glitch cut the
+            // scan short — confirmed live 2026-07-22: this used to
+            // silently mark such posts "done"/"error" and lose track of
+            // real invites already sent). Any of these leaves it "pending"
+            // for a retry EXCEPT after config.maxPostTimeCapAttempts
+            // repeated failures, at which point markPostStatus gives up on
+            // it and forces "done" anyway — see config.js's
+            // maxPostTimeCapAttempts comment for why a post can hit this
+            // cap forever without a give-up mechanism.
+            const incomplete = ["post_time_cap", "per_post_limit", "error_mid_scan"].includes(result.reason);
             scraper.markPostStatus(post.url, {
-                status: result.reason === "post_time_cap" ? "pending" : "done",
+                status: incomplete ? "pending" : "done",
                 invitedCount: dryRun ? 0 : result.invited,
                 error: null,
                 hitPostTimeCap: result.reason === "post_time_cap",

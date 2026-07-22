@@ -429,6 +429,16 @@ async function scrollAndInvite(
         })()
     `;
 
+    // Confirmed live (2026-07-22): a transient Puppeteer protocol error
+    // (e.g. "Runtime.callFunctionOn timed out") thrown mid-scan used to
+    // propagate all the way up to inviter.js's catch block, which discards
+    // the ACTUAL invited count and hardcodes invitedCount: 0 — real
+    // invites that were already sent (invitesSent already incremented
+    // in-memory) were silently lost from posts.json, the daily budget, and
+    // the history log alike. Catching here preserves whatever was
+    // genuinely achieved before the glitch instead of losing it.
+    let hadError = false;
+    try {
     while (invitesSent < maxInvites && scrollsWithoutNew < MAX_SCROLLS_WITHOUT_NEW) {
         if (Date.now() - postStart > maxTimeMs) {
             logger.warn(
@@ -803,9 +813,14 @@ async function scrollAndInvite(
             }
         }
     }
+    } catch (err) {
+        logger.error(`Scroll-and-invite loop hit an error after ${invitesSent} invite(s) this pass: ${err.message}`);
+        hadError = true;
+    }
 
-    const reason =
-        scrollsWithoutNew >= MAX_SCROLLS_WITHOUT_NEW ? "no_more_users" : "loop_exit";
+    const reason = hadError
+        ? "error_mid_scan"
+        : (scrollsWithoutNew >= MAX_SCROLLS_WITHOUT_NEW ? "no_more_users" : "loop_exit");
 
     logger.info(`Scroll loop finished. Invited: ${invitesSent}. Reason: ${reason}`);
     return { invited: invitesSent, scanned: -1, reason };
@@ -1149,7 +1164,14 @@ async function processPost(page, postUrl, dryRun = false, selectors = INVITE_SEL
         selectors,
     );
 
-    await closeReactionsDialog(page);
+    // Best-effort only — scrollAndInvite() already caught its own errors
+    // and returned a real result; a failure closing the dialog afterward
+    // (e.g. the page/context is already gone) must not discard that result.
+    try {
+        await closeReactionsDialog(page);
+    } catch (err) {
+        logger.warn(`Could not close reactions dialog after processing: ${err.message}`);
+    }
 
     return result;
 }
