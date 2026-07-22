@@ -126,8 +126,6 @@ function gatherData() {
         postsByStatus,
         storyCount,
         totalPosts: posts.length,
-        // Was capped at the 30 most-recently-processed posts — user wants
-        // the full history visible, not just recent activity (2026-07-20).
         postRows,
         totalInvitedAllTime,
         warningsAndErrors,
@@ -137,8 +135,28 @@ function gatherData() {
     };
 }
 
+/** Small subset of gatherData() used for the live-polled header/cards — kept
+ * cheap (no post-list scan) since this is fetched every 15s. */
+function gatherStatus() {
+    const rateState = rateLimiter.getState();
+    const postList = scraper.loadPostList();
+    const posts = (postList.posts || []).filter((p) => p.contentType !== "story");
+    const postsByStatus = { pending: 0, done: 0, error: 0 };
+    for (const p of posts) postsByStatus[p.status] = (postsByStatus[p.status] || 0) + 1;
+    const history = storage.getHistory();
+    const totalInvitedAllTime = history.reduce((sum, h) => sum + (h.invitedCount || 0), 0);
+
+    return {
+        runActive: isRunActive(),
+        rateState,
+        postsByStatus,
+        totalInvitedAllTime,
+        generatedAt: Date.now(),
+    };
+}
+
 // ──────────────────────────────────────────────
-// HTML rendering
+// Labels / formatting
 // ──────────────────────────────────────────────
 
 function esc(s) {
@@ -158,12 +176,12 @@ function fmtDate(isoDate) {
 }
 
 const STATUS_LABELS_CZ = { done: "hotovo", pending: "čeká", error: "chyba" };
+const STATUS_CLASS = { done: "ok", pending: "warn", error: "danger" };
 
 function statusBadge(status) {
-    const colors = { done: "#2e7d32", pending: "#e6a700", error: "#c62828" };
-    const color = colors[status] || "#666";
+    const cls = STATUS_CLASS[status] || "";
     const label = STATUS_LABELS_CZ[status] || status;
-    return `<span style="background:${color};color:#fff;padding:2px 8px;border-radius:10px;font-size:12px;">${esc(label)}</span>`;
+    return `<span class="badge badge-${cls}">${esc(label)}</span>`;
 }
 
 function contentTypeLabel(contentType) {
@@ -234,6 +252,10 @@ function paginate(rows, page) {
     return { pageRows: rows.slice(start, start + PAGE_SIZE), totalPages, safePage };
 }
 
+// ──────────────────────────────────────────────
+// HTML rendering
+// ──────────────────────────────────────────────
+
 function renderPage(data, query = {}) {
     const budgetPct = Math.min(
         100,
@@ -250,151 +272,286 @@ function renderPage(data, query = {}) {
     // when clicking the column already being sorted by.
     const sortLink = (key, label) => {
         const nextDir = sortKey === key && sortDir === "asc" ? "desc" : "asc";
-        const arrow = sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : "";
-        return `<a href="?sort=${key}&dir=${nextDir}&page=1" style="color:inherit;">${esc(label)}${arrow}</a>`;
+        const active = sortKey === key;
+        const arrow = active ? (sortDir === "asc" ? "▲" : "▼") : "";
+        return `<a class="sort-link${active ? " active" : ""}" href="?sort=${key}&dir=${nextDir}&page=1#posts">${esc(label)}<span class="sort-arrow">${arrow}</span></a>`;
     };
-    const pageLink = (p) => `?sort=${sortKey}&dir=${sortDir}&page=${p}`;
+    const pageLink = (p) => `?sort=${sortKey}&dir=${sortDir}&page=${p}#posts`;
 
     return `<!DOCTYPE html>
 <html lang="cs">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="20">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Inviter — Přehled</title>
 <style>
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #f4f5f7; color: #1c1c1c; margin: 0; padding: 24px; }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  .sub { color: #666; font-size: 13px; margin-bottom: 20px; }
-  .cards { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
-  .card { background: #fff; border-radius: 8px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,.1); min-width: 180px; }
-  .card .label { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: .05em; }
-  .card .value { font-size: 26px; font-weight: 600; margin-top: 4px; }
-  .bar-bg { background: #e0e0e0; border-radius: 6px; height: 10px; margin-top: 8px; overflow: hidden; }
-  .bar-fill { background: #1a73e8; height: 100%; }
-  section { background: #fff; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
-  section h2 { font-size: 15px; margin: 0 0 12px; }
+  :root {
+    --ink: #1B2420;
+    --paper: #EEF1EC;
+    --panel: #FFFFFF;
+    --line: #DBE1D8;
+    --muted: #667069;
+    --accent: #0E6B5C;
+    --accent-soft: #E1F0EB;
+    --warn: #A15A1A;
+    --warn-soft: #FBEEDD;
+    --danger: #A6342B;
+    --danger-soft: #FBEAE8;
+    --ok: #1E7A4C;
+    --ok-soft: #E7F4EC;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--paper); color: var(--ink); margin: 0;
+    -webkit-text-size-adjust: 100%;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .eyebrow { text-transform: uppercase; letter-spacing: .08em; font-size: 11px; color: var(--muted); font-weight: 600; }
+
+  header.topbar {
+    position: sticky; top: 0; z-index: 20;
+    background: rgba(238,241,236,.94); backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--line);
+    padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+  .topbar h1 { font-size: 16px; font-weight: 700; letter-spacing: -.01em; margin: 0; }
+  .status-live { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+  .pulse-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); position: relative; flex-shrink: 0; }
+  .pulse-dot.active { background: var(--accent); }
+  .pulse-dot.active::after {
+    content: ""; position: absolute; inset: -6px; border-radius: 50%; border: 2px solid var(--accent); opacity: .6;
+    animation: pulse-ring 1.8s ease-out infinite;
+  }
+  @keyframes pulse-ring { 0% { transform: scale(.5); opacity: .7; } 100% { transform: scale(2); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .pulse-dot.active::after { animation: none; } }
+
+  main { max-width: 1000px; margin: 0 auto; padding: 16px; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 16px 0 20px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+  .card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .card .value { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .bar-bg { background: var(--line); border-radius: 6px; height: 8px; margin-top: 8px; overflow: hidden; }
+  .bar-fill { background: var(--accent); height: 100%; transition: width .4s ease; }
+
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  section h2 { font-size: 14px; margin: 0 0 4px; font-weight: 700; }
+  .hint { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
-  th { color: #666; font-weight: 500; }
-  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-  .warn-line { color: #c62828; font-family: ui-monospace, Consolas, monospace; font-size: 12px; margin: 2px 0; white-space: pre-wrap; word-break: break-all; }
-  .badge-running { background:#1a73e8; color:#fff; padding:3px 10px; border-radius:10px; font-size:12px; }
-  .badge-idle { background:#666; color:#fff; padding:3px 10px; border-radius:10px; font-size:12px; }
-  .cooldown { background:#fff3cd; color:#856404; padding:8px 12px; border-radius:6px; font-size:13px; margin-bottom:12px; }
-  .empty { color: #999; font-size: 13px; padding: 8px 0; }
-  .hint { color: #999; font-size: 12px; margin-bottom: 10px; }
-  .pager { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 13px; color: #666; }
-  .pager a { font-weight: 500; }
-  .pager-disabled { color: #ccc; }
-  a { color: #1a73e8; text-decoration: none; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .sort-link { color: var(--ink); display: inline-flex; align-items: center; gap: 4px; }
+  .sort-link.active { color: var(--accent); }
+  .sort-arrow { font-size: 9px; }
+
+  .mono { font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace; }
+  .badge { padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .badge-ok { background: var(--ok-soft); color: var(--ok); }
+  .badge-warn { background: var(--warn-soft); color: var(--warn); }
+  .badge-danger { background: var(--danger-soft); color: var(--danger); }
+
+  .expand-btn { cursor: pointer; border: none; background: none; font-size: 13px; color: var(--muted); padding: 4px; line-height: 1; }
+  .sub-table-wrap { overflow-x: auto; }
+  .sub-table-wrap table { min-width: 480px; }
+
+  .pager { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; font-size: 13px; color: var(--muted); flex-wrap: wrap; gap: 8px; }
+  .pager a, .pager-disabled { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); font-weight: 600; min-height: 40px; display: inline-flex; align-items: center; }
+  .pager a { color: var(--ink); }
+  .pager a:hover { border-color: var(--accent); color: var(--accent); }
+  .pager-disabled { color: #b9c0b6; }
+
+  .cooldown { background: var(--warn-soft); color: var(--warn); padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-bottom: 16px; border: 1px solid #ecd7b8; }
+
+  .warn-line { color: var(--danger); font-family: ui-monospace, Consolas, monospace; font-size: 12px; margin: 2px 0; white-space: pre-wrap; word-break: break-all; }
+
+  details.tech summary { cursor: pointer; font-size: 14px; font-weight: 700; list-style: none; display: flex; align-items: center; gap: 8px; }
+  details.tech summary::-webkit-details-marker { display: none; }
+  details.tech summary::before { content: "▸"; color: var(--muted); font-size: 12px; transition: transform .15s ease; }
+  details.tech[open] summary::before { transform: rotate(90deg); }
+  #live-log { background: #161B18; color: #D6DBD3; padding: 12px; border-radius: 8px; max-height: 360px; overflow-y: auto; font-size: 12px; line-height: 1.5; margin: 12px 0 0; white-space: pre-wrap; word-break: break-all; }
+
+  #live-shot { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); display: none; }
+
+  footer.sub { color: var(--muted); font-size: 12px; text-align: center; padding: 8px 16px 24px; }
+
+  /* Posts table becomes stacked cards below ~700px so nothing needs
+     horizontal scrolling on a phone. */
+  @media (max-width: 700px) {
+    main { padding: 12px; }
+    table.posts thead { display: none; }
+    table.posts, table.posts > tbody { display: block; width: 100%; }
+    table.posts > tbody > tr.post-row {
+      display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 2px 10px;
+      border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px;
+    }
+    table.posts > tbody > tr.post-row td { border: none; padding: 3px 0; display: block; }
+    table.posts td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 11px; display: block; }
+    table.posts > tbody > tr.post-row td:nth-child(1) { grid-row: 1 / 4; grid-column: 1; }
+    table.posts > tbody > tr.post-row td:nth-child(2) { grid-column: 2; }
+    table.posts > tbody > tr.post-row td:nth-child(3) { grid-column: 3; text-align: right; }
+    table.posts > tbody > tr.post-row td:nth-child(4) { grid-column: 2; }
+    table.posts > tbody > tr.post-row td:nth-child(5) { grid-column: 3; text-align: right; }
+    table.posts > tbody > tr.post-row td:nth-child(6) { grid-column: 2; }
+    table.posts > tbody > tr.post-row td:nth-child(7) { grid-column: 2 / 4; margin-top: 4px; }
+    table.posts > tbody > tr.detail-row td { display: block; }
+  }
 </style>
 </head>
 <body>
-  <h1>Inviter — Přehled</h1>
-  <div class="sub">Pouze pro čtení. Automatická aktualizace každých 20 s. Vygenerováno ${esc(fmtTime(data.generatedAt))}</div>
-
-  <div class="cards">
-    <div class="card">
-      <div class="label">Stav běhu</div>
-      <div class="value">${data.runActive ? '<span class="badge-running">BĚŽÍ</span>' : '<span class="badge-idle">nečinný</span>'}</div>
+  <header class="topbar">
+    <h1>Inviter — Přehled</h1>
+    <div class="status-live">
+      <span id="pulse-dot" class="pulse-dot${data.runActive ? " active" : ""}"></span>
+      <span id="status-label">${data.runActive ? "Právě pracuje" : "Čeká na další spuštění"}</span>
     </div>
-    <div class="card">
-      <div class="label">Sledované období</div>
-      <div class="value" style="font-size:16px;">${esc(fmtDate(data.discoveryRange.from))} – ${esc(fmtDate(data.discoveryRange.to))}</div>
-    </div>
-    <div class="card">
-      <div class="label">Dnešní limit pozvánek</div>
-      <div class="value">${data.rateState.invitesToday} / ${data.rateState.dailyLimit}</div>
-      <div class="bar-bg"><div class="bar-fill" style="width:${budgetPct}%"></div></div>
-    </div>
-    <div class="card">
-      <div class="label">Čekající příspěvky</div>
-      <div class="value">${data.postsByStatus.pending || 0}</div>
-    </div>
-    <div class="card">
-      <div class="label">Dokončené příspěvky</div>
-      <div class="value">${data.postsByStatus.done || 0}</div>
-    </div>
-    <div class="card">
-      <div class="label">Celkem pozváno (od začátku)</div>
-      <div class="value">${data.totalInvitedAllTime}</div>
-    </div>
-  </div>
+  </header>
 
-  ${data.rateState.isCooldown ? `<div class="cooldown">⚠️ Ochranná pauza do ${esc(fmtTime(data.rateState.cooldownUntil))} — chyby po sobě: ${data.rateState.consecutiveErrors}</div>` : ""}
+  <main>
+    <div class="cards">
+      <div class="card">
+        <div class="label">Dnešní pozvánky</div>
+        <div class="value"><span id="stat-budget">${data.rateState.invitesToday} / ${data.rateState.dailyLimit}</span></div>
+        <div class="bar-bg"><div id="stat-budget-bar" class="bar-fill" style="width:${budgetPct}%"></div></div>
+      </div>
+      <div class="card">
+        <div class="label">Čeká na zpracování</div>
+        <div class="value"><span id="stat-pending">${data.postsByStatus.pending || 0}</span></div>
+      </div>
+      <div class="card">
+        <div class="label">Hotovo</div>
+        <div class="value"><span id="stat-done">${data.postsByStatus.done || 0}</span></div>
+      </div>
+      <div class="card">
+        <div class="label">Pozváno celkem</div>
+        <div class="value"><span id="stat-total-invited">${data.totalInvitedAllTime}</span></div>
+      </div>
+      <div class="card">
+        <div class="label">Cílové období</div>
+        <div class="value" style="font-size:15px;">${esc(fmtDate(data.discoveryRange.from))} – dnes</div>
+      </div>
+    </div>
 
-  <section>
-    <h2>Živý náhled <span id="live-shot-status" style="font-weight:normal;color:#999;font-size:12px;"></span></h2>
-    <img id="live-shot" alt="live screenshot" style="max-width:100%;border-radius:6px;border:1px solid #eee;display:none;" />
-    <div id="live-shot-empty" class="empty">Momentálně žádný běh — náhled není k dispozici.</div>
-  </section>
+    <div id="cooldown-slot">
+      ${data.rateState.isCooldown ? `<div class="cooldown">⚠️ Ochranná pauza do ${esc(fmtTime(data.rateState.cooldownUntil))} — chyby po sobě: ${data.rateState.consecutiveErrors}</div>` : ""}
+    </div>
 
-  <section>
-    <h2>Příspěvky (celkem ${data.totalPosts} — ${data.storyCount} Story repostů skryto, nemají dialog reakcí)</h2>
-    <div class="hint">Klikněte na název sloupce pro řazení. „Běhy" = kolikrát nástroj tento příspěvek zpracoval; šipka ▸ rozbalí historii jednotlivých běhů.</div>
-    ${data.postRows.length === 0 ? '<div class="empty">Zatím nebyly nalezeny žádné příspěvky.</div>' : `
-    <table>
-      <tr>
-        <th></th>
-        <th>${sortLink("date", "Datum")}</th>
-        <th>${sortLink("type", "Typ")}</th>
-        <th>${sortLink("status", "Stav")}</th>
-        <th>${sortLink("invited", "Pozváno celkem")}</th>
-        <th>${sortLink("runs", "Běhy")}</th>
-        <th>Odkaz</th>
-      </tr>
-      ${pageRows.map((p) => `
-      <tr>
-        <td>${p.runs.length > 0 ? `<button onclick="this.closest('tr').nextElementSibling.style.display = this.closest('tr').nextElementSibling.style.display === 'none' ? '' : 'none';" style="cursor:pointer;border:none;background:none;font-size:14px;">▸</button>` : ""}</td>
-        <td>${esc(p.date)}</td>
-        <td>${esc(contentTypeLabel(p.contentType))}</td>
-        <td>${statusBadge(p.status)}</td>
-        <td>${p.totalInvited}</td>
-        <td>${p.runs.length}</td>
-        <td>${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">Zobrazit</a>` : "—"}</td>
-      </tr>
-      <tr style="display:none;">
-        <td></td>
-        <td colspan="6">
-          ${p.runs.length === 0 ? '<span class="empty">Pro tento příspěvek zatím nejsou zaznamenány žádné běhy.</span>' : `
-          <table>
-            <tr><th>Kdy</th><th>Pozváno</th><th>Rychlost</th><th>Zkušební běh (bez odeslání)</th><th>Výsledek</th></tr>
-            ${p.runs.map((r) => `
-            <tr>
-              <td>${esc(fmtTime(r.ts))}</td>
-              <td>${r.invitedCount || 0}</td>
-              <td>${esc(rateModeLabel(r.rateMode))}</td>
-              <td>${r.dryRun ? "ano" : "ne"}</td>
-              <td>${esc(stopReasonLabel(r.stoppedReason))}</td>
-            </tr>`).join("")}
-          </table>`}
-        </td>
-      </tr>`).join("")}
-    </table>
-    <div class="pager">
-      <span>Stránka ${safePage} z ${totalPages} (${sortedRows.length} příspěvků)</span>
-      <span>
-        ${safePage > 1 ? `<a href="${pageLink(safePage - 1)}">‹ Předchozí</a>` : '<span class="pager-disabled">‹ Předchozí</span>'}
-        ${safePage < totalPages ? `<a href="${pageLink(safePage + 1)}">Další ›</a>` : '<span class="pager-disabled">Další ›</span>'}
-      </span>
-    </div>`}
-  </section>
+    <section>
+      <h2>Živý náhled</h2>
+      <div class="hint" id="live-shot-status">Co teď nástroj vidí na obrazovce.</div>
+      <img id="live-shot" alt="živý náhled prohlížeče" />
+      <div id="live-shot-empty" class="empty">Momentálně žádný běh — náhled není k dispozici.</div>
+    </section>
 
-  <section>
-    <h2>Nedávná varování / chyby</h2>
-    ${data.warningsAndErrors.length === 0 ? '<div class="empty">V posledním logu žádné nejsou.</div>' :
-      data.warningsAndErrors.map((l) => `<div class="warn-line">${esc(l)}</div>`).join("")}
-  </section>
+    <section id="posts">
+      <h2>Příspěvky <span style="color:var(--muted);font-weight:400;">(${data.totalPosts})</span></h2>
+      <div class="hint">Klikněte na název sloupce pro seřazení. Šipka ▸ zobrazí historii jednotlivých běhů u příspěvku. ${data.storyCount} Story repostů je skryto (nemají vlastní dialog reakcí, patří pod svůj původní příspěvek).</div>
+      ${data.postRows.length === 0 ? '<div class="empty">Zatím nebyly nalezeny žádné příspěvky.</div>' : `
+      <table class="posts">
+        <thead>
+        <tr>
+          <th></th>
+          <th>${sortLink("date", "Datum")}</th>
+          <th>${sortLink("type", "Typ")}</th>
+          <th>${sortLink("status", "Stav")}</th>
+          <th>${sortLink("invited", "Pozváno")}</th>
+          <th>${sortLink("runs", "Běhy")}</th>
+          <th>Odkaz</th>
+        </tr>
+        </thead>
+        <tbody>
+        ${pageRows.map((p, i) => `
+        <tr class="post-row">
+          <td>${p.runs.length > 0 ? `<button class="expand-btn" aria-expanded="false" onclick="toggleRun(this, ${i})" style="font-size:16px;">▸</button>` : ""}</td>
+          <td data-label="Datum">${esc(p.date)}</td>
+          <td data-label="Typ">${esc(contentTypeLabel(p.contentType))}</td>
+          <td data-label="Stav">${statusBadge(p.status)}</td>
+          <td data-label="Pozváno">${p.totalInvited}</td>
+          <td data-label="Běhy">${p.runs.length}</td>
+          <td data-label="Odkaz">${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">Zobrazit na Facebooku ↗</a>` : "—"}</td>
+        </tr>
+        <tr class="detail-row" id="detail-${i}" style="display:none;">
+          <td colspan="7">
+            ${p.runs.length === 0 ? '<span class="empty">Pro tento příspěvek zatím nejsou zaznamenány žádné běhy.</span>' : `
+            <div class="sub-table-wrap">
+            <table>
+              <tr><th>Kdy</th><th>Pozváno</th><th>Rychlost</th><th>Zkušební (bez odeslání)</th><th>Výsledek</th></tr>
+              ${p.runs.map((r) => `
+              <tr>
+                <td>${esc(fmtTime(r.ts))}</td>
+                <td>${r.invitedCount || 0}</td>
+                <td>${esc(rateModeLabel(r.rateMode))}</td>
+                <td>${r.dryRun ? "ano" : "ne"}</td>
+                <td>${esc(stopReasonLabel(r.stoppedReason))}</td>
+              </tr>`).join("")}
+            </table>
+            </div>`}
+          </td>
+        </tr>`).join("")}
+        </tbody>
+      </table>
+      <div class="pager">
+        <span>Stránka ${safePage} z ${totalPages} · ${sortedRows.length} příspěvků</span>
+        <span style="display:flex;gap:8px;">
+          ${safePage > 1 ? `<a href="${pageLink(safePage - 1)}">‹ Předchozí</a>` : '<span class="pager-disabled">‹ Předchozí</span>'}
+          ${safePage < totalPages ? `<a href="${pageLink(safePage + 1)}">Další ›</a>` : '<span class="pager-disabled">Další ›</span>'}
+        </span>
+      </div>`}
+    </section>
 
-  <section>
-    <h2>Živý log <span id="live-status" style="font-weight:normal;color:#999;font-size:12px;"></span></h2>
-    <pre id="live-log" style="background:#1c1c1c;color:#d4d4d4;padding:12px;border-radius:6px;max-height:400px;overflow-y:auto;font-size:12px;line-height:1.5;margin:0;white-space:pre-wrap;word-break:break-all;">(čekání na data logu…)</pre>
-  </section>
+    ${data.warningsAndErrors.length > 0 ? `
+    <section>
+      <h2>Nedávná varování a chyby</h2>
+      ${data.warningsAndErrors.map((l) => `<div class="warn-line">${esc(l)}</div>`).join("")}
+    </section>` : ""}
+
+    <details class="tech">
+      <summary>Technický log <span class="eyebrow">pro vývojáře</span></summary>
+      <div class="hint" id="live-status" style="margin-top:8px;">Syrový výstup nástroje — užitečné jen při ladění problémů.</div>
+      <pre id="live-log">(čekání na data logu…)</pre>
+    </details>
+
+    <footer class="sub">Pouze pro čtení · stav se automaticky aktualizuje, stránka se sama nepřekresluje · vygenerováno ${esc(fmtTime(data.generatedAt))}</footer>
+  </main>
 
   <script>
-    // Polls the live log every 3s without reloading the whole page, so the
-    // log panel updates smoothly while a run is in progress. The rest of
-    // the page still refreshes via the meta tag every 20s.
+    function toggleRun(btn, i) {
+      const row = document.getElementById("detail-" + i);
+      const open = row.style.display !== "none";
+      row.style.display = open ? "none" : "";
+      btn.style.transform = open ? "" : "rotate(90deg)";
+      btn.setAttribute("aria-expanded", String(!open));
+    }
+
+    // Live status/cards: polled in place every 15s. Replaces the old
+    // whole-page auto-refresh (was every 20s), which reloaded the entire
+    // page — including your scroll position and table page — even if
+    // nothing had changed. Only these small, genuinely-live numbers update
+    // now; the posts table stays put until you navigate it yourself.
+    async function pollStatus() {
+      try {
+        const res = await fetch("/api/status");
+        const s = await res.json();
+        const dot = document.getElementById("pulse-dot");
+        dot.className = "pulse-dot" + (s.runActive ? " active" : "");
+        document.getElementById("status-label").textContent = s.runActive ? "Právě pracuje" : "Čeká na další spuštění";
+        document.getElementById("stat-budget").textContent = s.rateState.invitesToday + " / " + s.rateState.dailyLimit;
+        const pct = Math.min(100, Math.round((s.rateState.invitesToday / (s.rateState.dailyLimit || 1)) * 100));
+        document.getElementById("stat-budget-bar").style.width = pct + "%";
+        document.getElementById("stat-pending").textContent = s.postsByStatus.pending || 0;
+        document.getElementById("stat-done").textContent = s.postsByStatus.done || 0;
+        document.getElementById("stat-total-invited").textContent = s.totalInvitedAllTime;
+      } catch (err) { /* keep last known values on a failed poll */ }
+    }
+    pollStatus();
+    setInterval(pollStatus, 15000);
+
+    // Polls the live log every 3s without reloading the page.
     const logEl = document.getElementById("live-log");
     const statusEl = document.getElementById("live-status");
     async function pollLog() {
@@ -429,7 +586,7 @@ function renderPage(data, query = {}) {
       test.onerror = () => {
         shotImg.style.display = "none";
         shotEmpty.style.display = "";
-        shotStatus.textContent = "";
+        shotStatus.textContent = "Co teď nástroj vidí na obrazovce.";
       };
       test.src = "/live-screenshot.jpg?t=" + Date.now();
     }
@@ -449,6 +606,17 @@ const server = http.createServer((req, res) => {
         try {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ lines: getLiveLogLines() }));
+        } catch (err) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+    }
+
+    if (req.url === "/api/status") {
+        try {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(gatherStatus()));
         } catch (err) {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: err.message }));
@@ -488,4 +656,4 @@ server.listen(PORT, () => {
     console.log(`Inviter dashboard running at http://localhost:${PORT} (read-only)`);
 });
 
-module.exports = { gatherData, renderPage };
+module.exports = { gatherData, gatherStatus, renderPage };
