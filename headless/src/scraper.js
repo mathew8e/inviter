@@ -701,12 +701,17 @@ function monthsBetween(fromDate, toDate) {
  *
  * @param {import('puppeteer').Page} page
  * @param {string} sinceDate — ISO date (YYYY-MM-DD) to use as the range start
+ * @param {string|null} [untilDate] — ISO date (YYYY-MM-DD) to use as the range end
+ *        (defaults to today). Lets discovery be confined to a narrow window
+ *        instead of always spanning to today — see discoverPostsFromContentLibrary's
+ *        chunked-window usage, added to work around a reproducible scroll
+ *        ceiling on long continuous scrolls (see PLAN.md).
  * @returns {Promise<boolean>} true if the range was set and applied
  */
-async function setContentLibraryDateRange(page, sinceDate) {
+async function setContentLibraryDateRange(page, sinceDate, untilDate = null) {
     const today = new Date();
-    const monthsBack = Math.max(0, monthsBetween(new Date(sinceDate), today));
-    logger.info(`Setting Content Library date range to ${sinceDate} (${monthsBack} months back)...`);
+    const endDate = untilDate ? new Date(untilDate) : today;
+    const startDate = new Date(sinceDate);
 
     // Open the date-range picker (button shows text like "Last 28 days: ...")
     const opened = await page.evaluate(() => {
@@ -727,49 +732,133 @@ async function setContentLibraryDateRange(page, sinceDate) {
     await page.mouse.click(opened.x, opened.y);
     await new Promise((r) => setTimeout(r, 1500));
 
+    // The calendar does NOT open showing the current actual month — it opens
+    // showing whatever month the CURRENTLY SELECTED PRESET's start date falls
+    // in (e.g. "Last 28 days" selected → opens on last month, not this one).
+    // Confirmed live (2026-07-11) this caused a systematic off-by-one in the
+    // number of prev/next clicks when the code assumed the calendar always
+    // starts on "today"'s month. Read the ACTUAL displayed month/year from
+    // the DOM instead of assuming it, and compute clicks relative to that.
+    const MONTH_NAMES = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ];
+    const visibleMonthText = await page.evaluate((names) => {
+        const re = new RegExp(`^(${names.join("|")}) \\d{4}$`);
+        for (const el of document.querySelectorAll("*")) {
+            const t = (el.textContent || "").trim();
+            if (re.test(t) && el.children.length === 0) return t;
+        }
+        return null;
+    }, MONTH_NAMES);
+    if (!visibleMonthText) {
+        logger.warn("Could not read the calendar's visible month — leaving default range in place.");
+        return false;
+    }
+    const [monthName, yearStr] = visibleMonthText.split(" ");
+    const calendarMonth = new Date(`${monthName} 1, ${yearStr}`);
+    const startMonthsBack = Math.max(0, monthsBetween(startDate, calendarMonth));
+    // Forward distance is computed directly between start and end (NOT via a
+    // separate "endMonthsBack relative to calendarMonth" — that formula
+    // silently clamped to 0 whenever endDate fell in a LATER month than the
+    // calendar's opening month, e.g. untilDate=today when the calendar opens
+    // on last month; confirmed live 2026-07-11 this produced a wrong applied
+    // range, e.g. "Custom: Jun 11 - Jun 27" instead of "Jun 27 - Jul 11").
+    // After navigating back startMonthsBack months we're on startDate's own
+    // month by construction, so the remaining forward distance to endDate's
+    // month is exactly monthsBetween(startDate, endDate).
+    const forwardClicks = Math.max(0, monthsBetween(startDate, endDate));
+    logger.info(
+        `Setting Content Library date range to ${sinceDate} → ${untilDate || "today"} ` +
+        `(calendar opened on ${visibleMonthText}; ${startMonthsBack} months back, ` +
+        `${forwardClicks} months forward)...`,
+    );
+
     // Coordinates of the calendar's prev/next month chevrons, relative to
-    // the picker popup that opens just below/right of the button. These
-    // were confirmed against a 1280x900 viewport — if the layout shifts,
-    // this will need re-verification (see PLAN.md testing notes).
-    const PREV_MONTH_XY = [1004, 355];
-    const NEXT_MONTH_XY = [1240, 355];
+    // the picker popup that opens just below/right of the button. Confirmed
+    // against a 1280x900 viewport via elementFromPoint + cursor:pointer probing
+    // (2026-07-11): the true clickable 16x16 icon sits at x=979/1215 (left
+    // edge), so the CENTER is (987, 353) / (1223, 353) — the previous
+    // (1004, 355) / (1240, 355) were 17px too far right and landed on a
+    // large non-interactive parent container instead of the icon, silently
+    // no-op'ing every prev/next click. This was the root cause of the
+    // applied range always being wrong (e.g. "Custom: Jun 1 - Jun 11"
+    // instead of the intended span) — if the layout shifts, this will need
+    // re-verification (see PLAN.md testing notes).
+    const PREV_MONTH_XY = [987, 353];
+    const NEXT_MONTH_XY = [1223, 353];
+
+    const readVisibleMonth = () => page.evaluate((names) => {
+        const re = new RegExp(`^(${names.join("|")}) \\d{4}$`);
+        for (const el of document.querySelectorAll("*")) {
+            const t = (el.textContent || "").trim();
+            if (re.test(t) && el.children.length === 0) return t;
+        }
+        return null;
+    }, MONTH_NAMES);
+
+    // Bounds of the calendar's day-grid, so a stray "1"/"15" elsewhere on the
+    // page (badges, indices, etc.) can't be mistaken for a day cell — the
+    // un-scoped whole-page search this replaced was a real source of
+    // mis-clicks (confirmed live 2026-07-11: mis-clicks sometimes navigated
+    // away from Content Library entirely).
+    const CALENDAR_BOUNDS = { xMin: 960, xMax: 1260, yMin: 395, yMax: 560 };
 
     const clickDayInVisibleMonth = async (dayNumber) => {
-        const rect = await page.evaluate((day) => {
+        const rect = await page.evaluate((day, bounds) => {
             for (const el of document.querySelectorAll("*")) {
                 if ((el.textContent || "").trim() === String(day) && el.children.length === 0) {
                     const r = el.getBoundingClientRect();
-                    if (r.width > 0 && r.width < 60) return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+                    if (
+                        r.width > 0 && r.width < 60 &&
+                        r.x >= bounds.xMin && r.x <= bounds.xMax &&
+                        r.y >= bounds.yMin && r.y <= bounds.yMax
+                    ) {
+                        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+                    }
                 }
             }
             return null;
-        }, dayNumber);
+        }, dayNumber, CALENDAR_BOUNDS);
         if (!rect) return false;
         await page.mouse.click(rect.x, rect.y);
         await new Promise((r) => setTimeout(r, 800));
         return true;
     };
 
-    // Navigate back monthsBack months, click day 1 as the range start.
-    for (let i = 0; i < monthsBack; i++) {
-        await page.mouse.click(...PREV_MONTH_XY);
-        await new Promise((r) => setTimeout(r, 150));
-    }
-    const startClicked = await clickDayInVisibleMonth(1);
+    // Click prev/next `count` times, verifying the displayed month actually
+    // changed each time (retrying once if not) — a plain fire-and-forget
+    // click loop silently no-op'd before (see PREV/NEXT_MONTH_XY note above),
+    // and nothing downstream would have caught that.
+    const navigateMonths = async (count, xy) => {
+        for (let i = 0; i < count; i++) {
+            const before = await readVisibleMonth();
+            let after = before;
+            for (let attempt = 0; attempt < 2 && after === before; attempt++) {
+                await page.mouse.click(...xy);
+                await new Promise((r) => setTimeout(r, 400));
+                after = await readVisibleMonth();
+            }
+            if (after === before) {
+                logger.warn(`Calendar month navigation did not change from "${before}" after retry.`);
+            }
+        }
+    };
+
+    // Navigate back startMonthsBack months, click the start day.
+    await navigateMonths(startMonthsBack, PREV_MONTH_XY);
+    const startClicked = await clickDayInVisibleMonth(startDate.getDate());
     if (!startClicked) {
         logger.warn("Could not click a start day in the calendar — leaving default range in place.");
         return false;
     }
 
-    // Navigate forward the same distance plus however many months are
-    // needed to reach the CURRENT month, then click today's day-of-month.
-    for (let i = 0; i < monthsBack + today.getMonth() + 1; i++) {
-        await page.mouse.click(...NEXT_MONTH_XY);
-        await new Promise((r) => setTimeout(r, 150));
-    }
-    const endClicked = await clickDayInVisibleMonth(today.getDate());
+    // Navigate forward exactly enough months to reach the END date's month,
+    // then click the end day.
+    await navigateMonths(forwardClicks, NEXT_MONTH_XY);
+    const endClicked = await clickDayInVisibleMonth(endDate.getDate());
     if (!endClicked) {
-        logger.warn("Could not click today's day in the calendar to complete the range.");
+        logger.warn("Could not click the end day in the calendar to complete the range.");
         return false;
     }
 
@@ -802,8 +891,74 @@ async function setContentLibraryDateRange(page, sinceDate) {
 }
 
 /**
+ * Selects the "This year: Jan 1 - <today>" preset — a single click, no
+ * fragile calendar day-picking required. Only covers Jan 1 of the current
+ * year onward, so it can't reach back into a prior year on its own.
+ *
+ * @param {import('puppeteer').Page} page
+ * @returns {Promise<boolean>} true if the preset was selected and applied
+ */
+async function selectThisYearPreset(page) {
+    const opened = await page.evaluate(() => {
+        for (const el of document.querySelectorAll('[role="button"]')) {
+            const t = (el.textContent || "").trim();
+            if (/^Last \d+ days:/.test(t) || /^This year:/.test(t) || /^Custom:/.test(t)) {
+                const r = el.getBoundingClientRect();
+                el.scrollIntoView({ block: "center" });
+                return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+            }
+        }
+        return null;
+    });
+    if (!opened) {
+        logger.warn("Could not find the date-range picker button — leaving default range in place.");
+        return false;
+    }
+    await page.mouse.click(opened.x, opened.y);
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const presetRect = await page.evaluate(() => {
+        for (const el of document.querySelectorAll("*")) {
+            const t = (el.textContent || "").trim();
+            if (/^This year:/.test(t) && el.children.length <= 2) {
+                const r = el.getBoundingClientRect();
+                if (r.width > 0 && r.width < 250) return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+            }
+        }
+        return null;
+    });
+    if (!presetRect) {
+        logger.warn('Could not find the "This year" preset option — leaving default range in place.');
+        return false;
+    }
+    await page.mouse.click(presetRect.x, presetRect.y);
+    await new Promise((r) => setTimeout(r, 800));
+
+    const applyRect = await page.evaluate(() => {
+        for (const el of document.querySelectorAll('[role="button"], button')) {
+            if ((el.textContent || "").trim() === "Apply") {
+                const r = el.getBoundingClientRect();
+                return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+            }
+        }
+        return null;
+    });
+    if (!applyRect) {
+        logger.warn("Apply button not found — This year preset may not have been applied.");
+        return false;
+    }
+    await page.mouse.click(applyRect.x, applyRect.y);
+    await new Promise((r) => setTimeout(r, 3000));
+
+    logger.info('Date range applied: This year preset.');
+    return true;
+}
+
+/**
  * Parses a Content Library date string into YYYY-MM-DD.
- * Formats seen: "Today at 5:22 PM", "Yesterday at 7:14 PM", "Jun 30 at 7:14 PM".
+ * Formats seen: "Today at 5:22 PM", "Yesterday at 7:14 PM", "Jun 30 at 7:14 PM"
+ * (posts under ~1 year old), and "Nov 2, 2025" (older posts — date only, no
+ * time, but WITH an explicit year).
  */
 function parseContentLibraryDate(text) {
     if (!text) return "unknown";
@@ -814,6 +969,17 @@ function parseContentLibraryDate(text) {
     }
     if (/^yesterday/i.test(text)) {
         return new Date(now.getTime() - 86400 * 1000).toISOString().slice(0, 10);
+    }
+    // "Nov 2, 2025" — explicit year given, use it directly rather than
+    // guessing (more robust than the current-year heuristic below, and the
+    // only path old-enough posts actually reach — confirmed live 2026-07-11
+    // this format was silently falling through to "unknown" before the
+    // explicit-year capture group was added to extractContentLibraryRows'
+    // dateMatch regex).
+    const withYear = text.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})/);
+    if (withYear) {
+        const guess = new Date(`${withYear[1]} ${withYear[2]}, ${withYear[3]}`);
+        if (!isNaN(guess.getTime())) return guess.toISOString().slice(0, 10);
     }
     // "Jun 30 at 7:14 PM" — no year given, assume current year (or previous
     // year if that would put it in the future, e.g. testing in January).
@@ -861,8 +1027,16 @@ async function extractContentLibraryRows(page) {
                 link.parentElement;
             const rowText = row ? row.textContent || "" : "";
 
+            // Facebook shows two different date formats depending on age:
+            // recent posts show "Jun 30 at 7:14 PM" (with a time), but posts
+            // older than roughly a year show just "Nov 2, 2025" (date only,
+            // no time). Confirmed live 2026-07-11: the original regex only
+            // matched the "at TIME" form, so every older post's dateText
+            // came back empty and parseContentLibraryDate() silently
+            // returned "unknown" for the entire Oct-Dec 2025 backlog — the
+            // exact range this project's backfill needs to reach.
             const dateMatch = rowText.match(
-                /(Today|Yesterday|[A-Za-z]{3,9}\s+\d{1,2})\s+at\s+\d{1,2}:\d{2}\s*(AM|PM)?/i,
+                /(Today|Yesterday|[A-Za-z]{3,9}\s+\d{1,2})(,\s*\d{4})?(\s+at\s+\d{1,2}:\d{2}\s*(AM|PM)?)?/i,
             );
 
             rows.push({
@@ -916,18 +1090,25 @@ async function extractContentLibraryRows(page) {
  *        by a future run (same multi-day catch-up as the invite phase).
  * @returns {Promise<Post[]>}
  */
-async function discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts, sinceDate = config.discoverSinceDate, maxDiscoveryTimeMs = 600000) {
+async function discoverPostsFromContentLibrary(
+    page, dateFrom, dateTo, maxPosts, sinceDate = config.discoverSinceDate, maxDiscoveryTimeMs = 600000,
+    untilDate = null, useThisYearPreset = false,
+) {
     const existing = loadPostList();
     const alreadySeen = new Set(existing.posts.map((p) => p.url).filter(Boolean));
 
     logger.info(
-        `Discovering posts from Content Library (max ${maxPosts}, dateFrom ${dateFrom}, sinceDate ${sinceDate})`,
+        `Discovering posts from Content Library (max ${maxPosts}, dateFrom ${dateFrom}, ` +
+        `sinceDate ${sinceDate}, untilDate ${untilDate || "today"}, ` +
+        `useThisYearPreset ${useThisYearPreset})`,
     );
 
     await page.goto(CONTENT_LIBRARY_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
     await new Promise((r) => setTimeout(r, 5000));
 
-    const rangeSet = await setContentLibraryDateRange(page, sinceDate);
+    const rangeSet = useThisYearPreset
+        ? await selectThisYearPreset(page)
+        : await setContentLibraryDateRange(page, sinceDate, untilDate);
     if (!rangeSet) {
         logger.warn(
             "Could not set the Content Library date range via the picker UI — " +
@@ -1027,6 +1208,7 @@ module.exports = {
     discoverPosts,
     discoverPostsFromContentLibrary,
     setContentLibraryDateRange,
+    selectThisYearPreset,
     extractContentLibraryRows,
     parseContentLibraryDate,
     loadPostList,
