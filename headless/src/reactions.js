@@ -40,20 +40,6 @@ const TEST_SELECTORS = [
 ];
 
 // ──────────────────────────────────────────────
-// Reactions count selectors — what to click to open the popup
-// ──────────────────────────────────────────────
-
-const REACTIONS_COUNT_SELECTORS = [
-    // Facebook wraps the reactions summary in various containers
-    '[aria-label*="reakc"][role="button"]',
-    '[aria-label*="reaction"][role="button"]',
-    'span[class*="reactions"][role="button"]',
-    'div[role="button"] span[class*="reaction"]',
-    // Generic fallback: any clickable element containing reactions count text
-    '[role="button"] span:has-text("reakc")',
-];
-
-// ──────────────────────────────────────────────
 // Mock HTML for unit testing
 // ──────────────────────────────────────────────
 

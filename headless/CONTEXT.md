@@ -109,10 +109,10 @@ D:\MASTER_FOLDER\PROJECTS\DIGITAL\CODE_PERSONAL\inviter\headless\
 
 ### `src/scraper.js` — Post Discovery
 
-- **`discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts)`**: Clicks Posts/All tab, scrolls feed, extracts URLs + dates, saves to `data/posts.json`.
-- **URL patterns found:** `/reel/NUMBER?fbid=...`, `/posts/pfbid...`
+- **`discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts, sinceDate, maxDiscoveryTimeMs, untilDate, useThisYearPreset)`**: Primary (only) discovery method. Navigates to the Professional Dashboard's Content Library, sets the date range via `setContentLibraryDateRange`/`selectThisYearPreset`, scrolls the virtualized table (`scrollContentLibraryTable`) extracting rows (`extractContentLibraryRows`), saves to `data/posts.json`.
 - **`markPostStatus(url, { status, invitedCount, error })`**: Updates a post entry in `posts.json` (used by orchestrator after each post).
 - **`loadPostList()` / `savePostList()`**: JSON read/write helpers.
+- The older feed-scraping approach (clicking the Posts/All tab and scrolling the public feed) has been removed — it was fully superseded by Content Library discovery and had no remaining callers.
 
 ---
 
@@ -278,7 +278,7 @@ CLI (index.js) → inviter.runWithBrowser()
   │
   ├── runPageWorkflow():
   │     ├── auth.navigateToPage(page, pageUrl)
-  │     ├── scraper.discoverPosts(page, dateFrom, dateTo, maxPosts)
+  │     ├── scraper.discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts, …)
   │     │     └── saves to data/posts.json
   │     │
   │     └── FOR EACH pending post (newest first):

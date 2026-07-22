@@ -345,7 +345,7 @@ runWithBrowser({ pageUrl, profileDir, headless, waitForLogin, dateFrom, dateTo, 
   → setupNavigationWatcher(page)          // mid-run session expiry detection
   → auth.ensureLoggedIn(page)
   → auth.navigateToPage(page, pageUrl)
-  → posts = scraper.discoverPosts(page, pageUrl, dateFrom, dateTo)
+  → posts = scraper.discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts)
   → for each post in posts (where status == "pending"):
       page.goto(post.url)
       rateLimiter.resetDailyIfNeeded()

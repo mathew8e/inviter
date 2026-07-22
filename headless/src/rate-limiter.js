@@ -380,7 +380,6 @@ module.exports = {
     releaseLock,
 
     // Daily management
-    resetDailyIfNeeded,
     getRemainingBudget,
     canInviteToday,
 

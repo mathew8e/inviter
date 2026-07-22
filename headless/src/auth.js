@@ -34,14 +34,6 @@ const LOGIN_PAGE_TITLES = [
     "Facebook - přihlášení",
 ];
 
-const PAGE_NOT_FOUND_INDICATORS = [
-    "page not found",
-    "stránka nebyla nalezena",
-    "this page isn't available",
-    "tato stránka není dostupná",
-    "the link may be broken",
-];
-
 // ──────────────────────────────────────────────
 // Session expired error class
 // ──────────────────────────────────────────────
@@ -179,54 +171,6 @@ async function ensureLoggedIn(page) {
 }
 
 // ──────────────────────────────────────────────
-// navigateToPage — switch to the target page
-// ──────────────────────────────────────────────
-
-/**
- * Navigates to the Facebook Page URL and verifies it loads correctly.
- *
- * @param {import('puppeteer').Page} page
- * @param {string} pageUrl — Full URL to the Facebook Page
- * @returns {Promise<boolean>}
- */
-async function navigateToPage(page, pageUrl) {
-    logger.info(`Navigating to page: ${pageUrl}`);
-
-    await page.goto(pageUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 30000,
-    });
-
-    // Let dynamic content settle
-    await new Promise((r) => setTimeout(r, 3000));
-    await dismissCookieBanner(page);
-
-    const url = page.url();
-    logger.info(`Page URL after navigation: ${url}`);
-
-    // ── Check for page-not-found ──
-    try {
-        const bodyText = await page.evaluate(() =>
-            (document.body.innerText || "").toLowerCase(),
-        );
-        for (const indicator of PAGE_NOT_FOUND_INDICATORS) {
-            if (bodyText.includes(indicator)) {
-                logger.error(
-                    `Page not found — body contains "${indicator}". ` +
-                        `Check FB_PAGE_URL: ${pageUrl}`,
-                );
-                return false;
-            }
-        }
-    } catch (err) {
-        logger.warn("Could not check page body: " + err.message);
-    }
-
-    logger.info("Page loaded successfully.");
-    return true;
-}
-
-// ──────────────────────────────────────────────
 // setupNavigationWatcher — catch mid-run expiry
 // ──────────────────────────────────────────────
 
@@ -267,7 +211,6 @@ function setupNavigationWatcher(page) {
 
 module.exports = {
     ensureLoggedIn,
-    navigateToPage,
     setupNavigationWatcher,
     dismissCookieBanner,
     SessionExpiredError,

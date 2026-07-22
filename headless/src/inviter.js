@@ -589,8 +589,7 @@ async function runWithBrowser({
 // ──────────────────────────────────────────────
 module.exports = {
     runWithBrowser,
-    // Exposed for testing / reuse
-    launchBrowser,
+    // Exposed for reuse by resweep_done_posts.js and tests
     gotoAndSettle,
     forceLightColorScheme,
     blockUnnecessaryResources,

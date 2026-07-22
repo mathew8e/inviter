@@ -59,7 +59,7 @@ audience organically — people who already react are warm leads.
 | `src/config.js` | Central config, rate-mode table, `yearsBack`, `discoveryTimeCapMs` — **note: `.env` is NOT auto-loaded** (no `dotenv` in this codebase); every env var that matters must be set inline on the command/cron line (see §8.2) |
 | `src/rate-limiter.js` | Daily budget, cooldowns, lock file (prevents concurrent runs) |
 | `src/auth.js` | Login verify, page nav, session-expiry watcher |
-| `src/scraper.js` | Post discovery — **primary path is `discoverPostsFromContentLibrary()`** (see §7); legacy feed-based `discoverPosts()` kept but unused by the live workflow |
+| `src/scraper.js` | Post discovery via `discoverPostsFromContentLibrary()` (see §7); the legacy feed-scraping `discoverPosts()` has been removed |
 | `src/reactions.js` | Reactions dialog: open, scroll-and-invite loop, stable person-ID dedup, reel/story handling |
 | `src/validate-invites.js` | Standalone fast **read-only** scanner (`node src/validate-invites.js <url>`) — scrolls a reactions dialog quickly with minimal delay to sanity-check that production invited (or would invite) everyone eligible, without ever clicking anything |
 | `src/dashboard.js` | Read-only HTTP dashboard (`node src/dashboard.js`, default port 8787) — merged posts + invite-history table, budget/status cards, live log panel polling `/api/logs` |
@@ -197,13 +197,15 @@ Unchanged — `ensureLoggedIn()`, `navigateToPage()`, session-expiry detection.
 
 ### 5.3 `src/scraper.js` — Post Discovery
 
-The module now exports two discovery paths:
+The module exports a single discovery path:
 
 - **`discoverPostsFromContentLibrary(page, dateFrom, dateTo, maxPosts, yearsBack, maxDiscoveryTimeMs)`**
-  — **the one actually used** by `runPageWorkflow`. See §7 for the full mechanics (calendar
+  — used by `runPageWorkflow`. See §7 for the full mechanics (calendar
   automation, wheel-based scrolling, patience/stall detection, time cap).
-- `discoverPosts(page, pageUrl, dateFrom, dateTo, maxPosts)` — the original feed-scraping
-  implementation. Left in place (and still exported/tested) but not called by the live workflow.
+
+The original feed-scraping implementation (`discoverPosts` and its helpers —
+`switchToMostRecent`, `extractVisiblePosts`, `scrollToBottom`, `extractDateString`) has been
+removed entirely: it had no remaining callers once Content Library discovery replaced it.
 
 Also in this file: `markPostStatus()` (updates a single post's bookkeeping in `posts.json`),
 `mergePostLists()`, `filterByDate()`, `parseContentLibraryDate()`, `extractContentLibraryRows()`.

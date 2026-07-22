@@ -18,6 +18,7 @@ const storage = require("./src/storage");
 const config = require("./src/config");
 const logger = require("./src/logger");
 const { gotoAndSettle, forceLightColorScheme, blockUnnecessaryResources } = require("./src/inviter");
+const { startLiveScreenshotLoop } = require("./src/screenshot");
 
 (async () => {
     await storage.init();
@@ -30,8 +31,10 @@ const { gotoAndSettle, forceLightColorScheme, blockUnnecessaryResources } = requ
     // and invite processing for the run's entire duration.
     rateLimiter.acquireLock();
     let lockHeld = true;
+    let stopLiveScreenshot = () => {};
     const releaseLock = () => {
         if (lockHeld) {
+            stopLiveScreenshot();
             rateLimiter.releaseLock();
             lockHeld = false;
         }
@@ -45,6 +48,7 @@ const { gotoAndSettle, forceLightColorScheme, blockUnnecessaryResources } = requ
     await page.setUserAgent(config.userAgent);
     await page.setViewport({ width: 1280, height: 900 });
     await blockUnnecessaryResources(page);
+    stopLiveScreenshot = startLiveScreenshotLoop(page);
 
     await auth.ensureLoggedIn(page);
     auth.setupNavigationWatcher(page);
