@@ -317,7 +317,7 @@ async function runPageWorkflow(page, opts) {
     logger.info(
         `${pending.length}/${allKnownPosts.length} known posts are due a pass (pending, plus "done" ` +
         `posts <=${config.recheckFastWindowDays}d old checked every ${Math.round(config.recheckFastIntervalMs / 3600000)}h, ` +
-        `and <=${config.recheckWindowDays}d old checked every ${Math.round(config.recheckIntervalMs / 3600000)}h; oldest first) — ` +
+        `and older ones checked every ${Math.round(config.recheckIntervalMs / 3600000)}h; oldest first) — ` +
         `${discovered.length} newly discovered this run.`,
     );
 

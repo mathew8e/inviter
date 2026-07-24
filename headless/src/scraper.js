@@ -102,14 +102,22 @@ function filterByDate(posts, dateFrom, dateTo) {
 
 /**
  * A post is eligible for a processing pass if it's still "pending"/"error",
- * OR if it's "done" but was published within config.recheckWindowDays and
- * is due another look — Facebook posts keep collecting new reactions long
- * after their first clean scan, so a "done" post needs periodic re-checks,
- * not a one-time pass (see config.js's recheckWindowDays comment for the
- * full reasoning). Two-tier schedule: near-every-cron-cycle while the post
- * is still within recheckFastWindowDays of publication (most new reactions
- * land here), tapering to once every recheckIntervalMs for the rest of
- * recheckWindowDays.
+ * OR if it's "done" and due another look — Facebook posts keep collecting
+ * new reactions indefinitely after their first clean scan, so a "done"
+ * post needs periodic re-checks forever, not a one-time pass or a pass
+ * that stops after some fixed age. Confirmed live (2026-07-24): posts
+ * published months ago, whose only check happened long after publication
+ * (deep in the historical backlog), still had real un-invited reactors —
+ * an earlier version of this function stopped rechecking anything more
+ * than 30 days past its PUBLICATION date, which for a post whose first
+ * check itself happened 78 days after publication meant zero rechecks,
+ * ever. There is no reliable cutoff where a post can never get a new
+ * reaction again, so there is no age-based exclusion here anymore — only
+ * the interval below, which keeps the ongoing cost bounded.
+ *
+ * Two-tier schedule: near-every-cron-cycle while the post is still within
+ * recheckFastWindowDays of publication (most new reactions land here),
+ * tapering to once every recheckIntervalMs forever after that.
  *
  * @param {object} post
  * @param {number} [now]
@@ -123,7 +131,6 @@ function isEligibleForProcessing(post, now = Date.now()) {
     if (post.contentType === "story") return false;
     if (post.date === "unknown") return false;
     const ageMs = now - new Date(post.date).getTime();
-    if (ageMs > config.recheckWindowDays * 86400000) return false;
     const interval = ageMs <= config.recheckFastWindowDays * 86400000
         ? config.recheckFastIntervalMs
         : config.recheckIntervalMs;

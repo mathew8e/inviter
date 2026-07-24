@@ -167,26 +167,31 @@ const config = Object.freeze({
 
     // A post marked "done" was only fully clear of uninvited reactors AT
     // THE MOMENT it was checked — Facebook posts keep collecting new
-    // reactions for days afterward, and nothing re-opens a "done" post's
-    // reactions dialog to check for people who reacted since. Confirmed
-    // live (2026-07-22) by the page owner manually finding dozens/hundreds
-    // of un-invited reactors on posts already marked "done", some barely
-    // 24h old — and, per his own observation of this page's engagement
-    // pattern, a post's reactions mostly arrive in its first ~3-4 days
-    // then taper off sharply.
+    // reactions indefinitely afterward, and nothing re-opens a "done"
+    // post's reactions dialog to check for people who reacted since.
+    // Confirmed live (2026-07-22) by the page owner manually finding
+    // dozens/hundreds of un-invited reactors on posts already marked
+    // "done", some barely 24h old. An earlier version of this also stopped
+    // rechecking anything more than recheckWindowDays past its PUBLICATION
+    // date — confirmed live (2026-07-24) this wrongly excluded posts from
+    // the historical backlog whose first-ever check itself happened
+    // months after publication, giving them zero real recheck coverage.
+    // There's no reliable age past which a post can never get a new
+    // reaction, so there is no cutoff anymore — every "done" post stays
+    // eligible forever, just at a tapering frequency (see
+    // scraper.isEligibleForProcessing).
     //
     // Two-tier schedule instead of one flat interval: a post is checked
     // essentially every cron cycle while it's "fresh" (age <=
     // recheckFastWindowDays), since that's when most new reactions
     // actually land and missing them for a whole day is the exact problem
     // being fixed. Past that, it tapers to once every recheckIntervalMs
-    // for the remainder of recheckWindowDays — full-list rescans on a
-    // large, mostly-already-invited reactor list aren't free, so an old
-    // post that's very unlikely to have anything new doesn't need
-    // cron-frequency attention, just an occasional check for stragglers.
+    // forever — full-list rescans on a large, mostly-already-invited
+    // reactor list aren't free, so an old post that's very unlikely to
+    // have anything new doesn't need cron-frequency attention, just an
+    // occasional check for stragglers.
     recheckFastWindowDays: parseInt(process.env.RECHECK_FAST_WINDOW_DAYS || "4", 10),
     recheckFastIntervalMs: parseInt(process.env.RECHECK_FAST_INTERVAL_MS || String(60 * 60 * 1000), 10),
-    recheckWindowDays: parseInt(process.env.RECHECK_WINDOW_DAYS || "30", 10),
     recheckIntervalMs: parseInt(process.env.RECHECK_INTERVAL_MS || String(24 * 60 * 60 * 1000), 10),
 
     // Wall-clock cap (ms) for a "discovery-only" run — used automatically
