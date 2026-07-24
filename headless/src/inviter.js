@@ -396,18 +396,27 @@ async function runPageWorkflow(page, opts) {
             // Mark this post as done (dry runs are still marked done so we
             // don't re-scan them every day; delete posts.json to rescan) —
             // UNLESS the pass genuinely didn't reach the end of the reactor
-            // list: "post_time_cap" (its own time budget ran out),
-            // "per_post_limit" (hit maxInvites before the list was
-            // exhausted), or "error_mid_scan" (a Puppeteer glitch cut the
-            // scan short — confirmed live 2026-07-22: this used to
-            // silently mark such posts "done"/"error" and lose track of
-            // real invites already sent). Any of these leaves it "pending"
-            // for a retry EXCEPT after config.maxPostTimeCapAttempts
-            // repeated failures, at which point markPostStatus gives up on
-            // it and forces "done" anyway — see config.js's
-            // maxPostTimeCapAttempts comment for why a post can hit this
-            // cap forever without a give-up mechanism.
-            const incomplete = ["post_time_cap", "per_post_limit", "error_mid_scan"].includes(result.reason);
+            // list (or never even started scanning it):
+            //   "post_time_cap"    — its own time budget ran out
+            //   "per_post_limit"   — hit maxInvites before the list was exhausted
+            //   "error_mid_scan"   — a Puppeteer glitch cut the scan short
+            //   "dialog_not_opened"/"no_container_found" — the scan never
+            //     started at all; confirmed live 2026-07-24: the page owner
+            //     manually found 10 real un-invited reactors on a post that
+            //     got marked "done" purely because the reactions dialog
+            //     failed to open that one pass — zero information was
+            //     gained, yet it was treated as a clean completion
+            //   "no_budget"        — didn't even attempt this post because
+            //     the daily budget was already exhausted
+            // Any of these leaves it "pending" for a retry EXCEPT after
+            // config.maxPostTimeCapAttempts repeated failures, at which
+            // point markPostStatus gives up on it and forces "done" anyway
+            // — see config.js's maxPostTimeCapAttempts comment for why a
+            // post can hit this cap forever without a give-up mechanism.
+            const incomplete = [
+                "post_time_cap", "per_post_limit", "error_mid_scan",
+                "dialog_not_opened", "no_container_found", "no_budget",
+            ].includes(result.reason);
             scraper.markPostStatus(post.url, {
                 status: incomplete ? "pending" : "done",
                 invitedCount: dryRun ? 0 : result.invited,

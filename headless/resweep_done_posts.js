@@ -97,10 +97,13 @@ const { startLiveScreenshotLoop } = require("./src/screenshot");
                 resweep: true,
             });
 
-            // "post_time_cap"/"per_post_limit"/"error_mid_scan" all mean the
-            // pass didn't reach the end of the reactor list — see
+            // These reasons all mean the pass didn't reach the end of the
+            // reactor list, or never started scanning it at all — see
             // inviter.js's matching comment for the full reasoning.
-            const incomplete = ["post_time_cap", "per_post_limit", "error_mid_scan"].includes(result.reason);
+            const incomplete = [
+                "post_time_cap", "per_post_limit", "error_mid_scan",
+                "dialog_not_opened", "no_container_found", "no_budget",
+            ].includes(result.reason);
             scraper.markPostStatus(post.url, {
                 status: incomplete ? "pending" : "done",
                 invitedCount: result.invited,
