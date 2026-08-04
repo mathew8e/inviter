@@ -303,21 +303,32 @@ async function runPageWorkflow(page, opts) {
     // Pull the FULL accumulated list instead of just this run's new batch,
     // so nothing already-pending is ever left behind.
     //
-    // Sorted OLDEST-first (not newest-first): the page owner explicitly
-    // wants the backlog worked from the deep past forward, not from
-    // yesterday backward, since the recent posts are the ones least likely
-    // to represent missed opportunity. Once the backlog is fully cleared
-    // (see PLAN.md §7), the plan is to switch discoverSinceDate to a short
-    // rolling window (e.g. "5 days back"), at which point sort order stops
-    // mattering much either way.
+    // Fresh posts (within recheckFastWindowDays of publication) sort FIRST
+    // as a group, oldest-first backlog after — confirmed live (2026-08-04)
+    // by the page owner manually finding 300 un-invited reactors on a
+    // 3-day-old post: a plain oldest-first sort let a large backlog queue
+    // starve the newest posts out of every run's time budget, even though
+    // they were nominally "eligible" every hour per the fast recheck tier.
+    // Fresh posts have the highest follow-conversion rate of anything this
+    // tool touches, so they can never be left waiting behind older,
+    // lower-stakes backlog items — see scraper.isFreshPost(). Within each
+    // of the two groups, oldest-first still applies: for the backlog it
+    // works the deep past forward as originally intended (see PLAN.md §7);
+    // for the fresh group it just means whichever post has waited longest
+    // since its last check goes first.
+    const now = Date.now();
     const allKnownPosts = scraper.loadPostList().posts;
     const pending = allKnownPosts
-        .filter((p) => scraper.isEligibleForProcessing(p))
-        .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+        .filter((p) => scraper.isEligibleForProcessing(p, now))
+        .sort((a, b) => {
+            const aFresh = scraper.isFreshPost(a, now) ? 0 : 1;
+            const bFresh = scraper.isFreshPost(b, now) ? 0 : 1;
+            if (aFresh !== bFresh) return aFresh - bFresh;
+            return (a.date || "").localeCompare(b.date || "");
+        });
     logger.info(
-        `${pending.length}/${allKnownPosts.length} known posts are due a pass (pending, plus "done" ` +
-        `posts <=${config.recheckFastWindowDays}d old checked every ${Math.round(config.recheckFastIntervalMs / 3600000)}h, ` +
-        `and older ones checked every ${Math.round(config.recheckIntervalMs / 3600000)}h; oldest first) — ` +
+        `${pending.length}/${allKnownPosts.length} known posts are due a pass (fresh posts ` +
+        `<=${config.recheckFastWindowDays}d old go first, then pending/backlog oldest-first) — ` +
         `${discovered.length} newly discovered this run.`,
     );
 

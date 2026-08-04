@@ -101,6 +101,23 @@ function filterByDate(posts, dateFrom, dateTo) {
 // ──────────────────────────────────────────────
 
 /**
+ * True while a post is still within the "fast" recheck window
+ * (config.recheckFastWindowDays of its publication date) — the period
+ * where most new reactions actually land. Shared by isEligibleForProcessing
+ * (which interval applies) and the queue sort in inviter.js (which posts
+ * jump ahead of the backlog) so the two stay in sync.
+ *
+ * @param {object} post
+ * @param {number} [now]
+ * @returns {boolean}
+ */
+function isFreshPost(post, now = Date.now()) {
+    if (post.date === "unknown") return false;
+    const ageMs = now - new Date(post.date).getTime();
+    return ageMs <= config.recheckFastWindowDays * 86400000;
+}
+
+/**
  * A post is eligible for a processing pass if it's still "pending"/"error",
  * OR if it's "done" and due another look — Facebook posts keep collecting
  * new reactions indefinitely after their first clean scan, so a "done"
@@ -130,8 +147,7 @@ function isEligibleForProcessing(post, now = Date.now()) {
     // otherwise become "eligible" for a pointless recheck every cycle.
     if (post.contentType === "story") return false;
     if (post.date === "unknown") return false;
-    const ageMs = now - new Date(post.date).getTime();
-    const interval = ageMs <= config.recheckFastWindowDays * 86400000
+    const interval = isFreshPost(post, now)
         ? config.recheckFastIntervalMs
         : config.recheckIntervalMs;
     return !post.processedAt || now - post.processedAt >= interval;
@@ -779,4 +795,5 @@ module.exports = {
     filterByDate,
     mergePostLists,
     isEligibleForProcessing,
+    isFreshPost,
 };
