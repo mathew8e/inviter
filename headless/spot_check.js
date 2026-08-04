@@ -24,7 +24,7 @@ const logger = require("./src/logger");
 const { gotoAndSettle, blockUnnecessaryResources } = require("./src/inviter");
 
 function pickTarget() {
-    const arg = process.argv[2];
+    const arg = process.argv.slice(2).find((a) => !a.startsWith("--"));
     const allPosts = scraper.loadPostList().posts;
 
     if (arg) {
@@ -56,7 +56,8 @@ function pickTarget() {
     console.log(`\nSpot-checking: ${target.url}`);
     console.log(`(date=${target.date}, status=${target.status}, previously invitedCount=${target.invitedCount || 0})\n`);
 
-    const opts = session.getLaunchOptions("./profile", "new");
+    const visible = process.argv.includes("--visible");
+    const opts = session.getLaunchOptions("./profile", visible ? false : "new");
     const browser = await puppeteer.launch(opts);
     const page = await browser.newPage();
     await page.setUserAgent(config.userAgent);
