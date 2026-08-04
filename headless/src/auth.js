@@ -18,12 +18,21 @@ const LOGIN_REDIRECT_PATTERNS = [
     "login_identifier",
 ];
 
+// Confirmed live (2026-08-04): a stale/never-completed local session sat on
+// Facebook's "Continue as [Name]" account-chooser screen (a genuinely
+// logged-OUT state, with Log In/Sign Up buttons) and STILL passed this
+// check — because 'link[rel="canonical"][href*="facebook.com"]' is a
+// generic SEO tag present on every facebook.com page regardless of login
+// state, not something requiring authentication. It was providing a false
+// positive that silently masked real login failures (every subsequent
+// action failed with "dialog_not_opened" instead of the clear, actionable
+// SessionExpiredError this check exists to produce). The remaining four
+// selectors all genuinely require an authenticated session to render.
 const LOGGED_IN_INDICATORS = [
     '[role="navigation"]',
     '[aria-label="Home"]',
     '[aria-label="Domů"]',
     '[data-pagelet="page"]',
-    'link[rel="canonical"][href*="facebook.com"]',
 ];
 
 const LOGIN_PAGE_TITLES = [
