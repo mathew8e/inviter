@@ -57,16 +57,17 @@ function pickTarget() {
     console.log(`(date=${target.date}, status=${target.status}, previously invitedCount=${target.invitedCount || 0})\n`);
 
     const visible = process.argv.includes("--visible");
-    const opts = session.getLaunchOptions("./profile", visible ? false : "new");
-    const browser = await puppeteer.launch(opts);
-    const page = await browser.newPage();
-    await page.setUserAgent(config.userAgent);
-    await page.setViewport({ width: 1280, height: 900 });
-    await blockUnnecessaryResources(page);
-    await auth.ensureLoggedIn(page);
-    auth.setupNavigationWatcher(page);
-
+    let browser;
     try {
+        const opts = session.getLaunchOptions("./profile", visible ? false : "new");
+        browser = await puppeteer.launch(opts);
+        const page = await browser.newPage();
+        await page.setUserAgent(config.userAgent);
+        await page.setViewport({ width: 1280, height: 900 });
+        await blockUnnecessaryResources(page);
+        await auth.ensureLoggedIn(page);
+        auth.setupNavigationWatcher(page);
+
         await gotoAndSettle(page, target.url);
         await rateLimiter.detectRateLimit(page);
 
@@ -107,7 +108,7 @@ function pickTarget() {
     } catch (err) {
         console.error(`Spot-check failed: ${err.message}`);
     } finally {
-        await browser.close();
+        if (browser) await browser.close();
         releaseLock();
     }
 })();
