@@ -538,15 +538,31 @@ async function selectThisYearPreset(page) {
  * (posts under ~1 year old), and "Nov 2, 2025" (older posts — date only, no
  * time, but WITH an explicit year).
  */
+/**
+ * Formats a Date using its LOCAL calendar components (not toISOString(),
+ * which is always UTC). Confirmed live (2026-08-04): the Pi runs in
+ * Europe/Prague (UTC+1/+2) — `new Date("July 5, 2026")` parses as local
+ * midnight, which is July 4, 22:00/23:00 UTC, so `.toISOString().slice(0,
+ * 10)` silently reported every date exactly one day too early. Reading
+ * the same Date back with the local getters instead of toISOString()
+ * returns the calendar date that was actually intended.
+ */
+function formatLocalDate(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+}
+
 function parseContentLibraryDate(text) {
     if (!text) return "unknown";
     const now = new Date();
 
     if (/^today/i.test(text)) {
-        return now.toISOString().slice(0, 10);
+        return formatLocalDate(now);
     }
     if (/^yesterday/i.test(text)) {
-        return new Date(now.getTime() - 86400 * 1000).toISOString().slice(0, 10);
+        return formatLocalDate(new Date(now.getTime() - 86400 * 1000));
     }
     // "Nov 2, 2025" — explicit year given, use it directly rather than
     // guessing (more robust than the current-year heuristic below, and the
@@ -557,7 +573,7 @@ function parseContentLibraryDate(text) {
     const withYear = text.match(/^([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})/);
     if (withYear) {
         const guess = new Date(`${withYear[1]} ${withYear[2]}, ${withYear[3]}`);
-        if (!isNaN(guess.getTime())) return guess.toISOString().slice(0, 10);
+        if (!isNaN(guess.getTime())) return formatLocalDate(guess);
     }
     // "Jun 30 at 7:14 PM" — no year given, assume current year (or previous
     // year if that would put it in the future, e.g. testing in January).
@@ -568,7 +584,7 @@ function parseContentLibraryDate(text) {
             if (guess.getTime() > now.getTime() + 86400 * 1000) {
                 guess.setFullYear(guess.getFullYear() - 1);
             }
-            return guess.toISOString().slice(0, 10);
+            return formatLocalDate(guess);
         }
     }
     return "unknown";
