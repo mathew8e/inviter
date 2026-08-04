@@ -1,11 +1,15 @@
-// One-off sweep: re-scans every already-"done", non-story post at the
-// fastest safe pacing (aggressive rate mode) with the newly-fixed
-// double-confirmation end-of-list logic, to catch reactors that earlier
-// (pre-fix) runs may have missed via a premature "end of list" false
-// positive. Reuses the exact same building blocks as the normal cron flow
-// (auth, gotoAndSettle, processPost, rate limiter) for one long-lived
-// browser session across the whole backlog, instead of relaunching Chrome
-// per post.
+// One-off sweep: re-scans every non-story backlog post — "done" AND
+// "pending" alike — at the fastest safe pacing (aggressive rate mode).
+// Confirmed live (2026-08-04): limiting this to "done" posts only left a
+// large chunk of the backlog (228 posts, 190 of them 30+ days old, some
+// already sitting on hundreds of recorded invites) permanently excluded
+// from the resweep — they'd been interrupted mid-scan at some point
+// (post_time_cap/error_mid_scan/etc, all correctly left "pending" for a
+// retry) and were only ever getting the slower moderate-mode cron pace to
+// clear, never this tool's faster aggressive settings. Reuses the exact
+// same building blocks as the normal cron flow (auth, gotoAndSettle,
+// processPost, rate limiter) for one long-lived browser session across
+// the whole backlog, instead of relaunching Chrome per post.
 process.env.RATE_MODE = "aggressive";
 
 const puppeteer = require("puppeteer");
@@ -54,8 +58,22 @@ const { startLiveScreenshotLoop } = require("./src/screenshot");
     auth.setupNavigationWatcher(page);
 
     const allPosts = scraper.loadPostList().posts;
-    const targets = allPosts.filter((p) => p.status === "done" && p.contentType !== "story");
-    logger.info(`Resweep: ${targets.length} done posts to re-check.`);
+    // "done", "pending", AND "error" alike — a post sitting in any of
+    // these states can still have real un-invited reactors behind it (a
+    // "pending"/"error" post was very likely interrupted mid-scan, not
+    // untouched). Sort with the same fresh-first priority as inviter.js's
+    // normal queue (see scraper.isFreshPost) so a fresh post never waits
+    // behind this tool's much larger backlog either.
+    const now = Date.now();
+    const targets = allPosts
+        .filter((p) => p.contentType !== "story")
+        .sort((a, b) => {
+            const aFresh = scraper.isFreshPost(a, now) ? 0 : 1;
+            const bFresh = scraper.isFreshPost(b, now) ? 0 : 1;
+            if (aFresh !== bFresh) return aFresh - bFresh;
+            return (a.date || "").localeCompare(b.date || "");
+        });
+    logger.info(`Resweep: ${targets.length} posts to re-check (done + pending + error, fresh-first).`);
 
     let totalNewInvites = 0;
     let postsWithNewInvites = 0;
