@@ -22,6 +22,7 @@ const storage = require("./src/storage");
 const config = require("./src/config");
 const logger = require("./src/logger");
 const { gotoAndSettle, blockUnnecessaryResources } = require("./src/inviter");
+const { startLiveScreenshotLoop } = require("./src/screenshot");
 
 function pickTarget() {
     const arg = process.argv.slice(2).find((a) => !a.startsWith("--"));
@@ -58,6 +59,7 @@ function pickTarget() {
 
     const visible = process.argv.includes("--visible");
     let browser;
+    let stopLiveScreenshot = () => {};
     try {
         const opts = session.getLaunchOptions("./profile", visible ? false : "new");
         browser = await puppeteer.launch(opts);
@@ -65,6 +67,7 @@ function pickTarget() {
         await page.setUserAgent(config.userAgent);
         await page.setViewport({ width: 1280, height: 900 });
         await blockUnnecessaryResources(page);
+        stopLiveScreenshot = startLiveScreenshotLoop(page);
         await auth.ensureLoggedIn(page);
         auth.setupNavigationWatcher(page);
 
@@ -108,6 +111,7 @@ function pickTarget() {
     } catch (err) {
         console.error(`Spot-check failed: ${err.message}`);
     } finally {
+        stopLiveScreenshot();
         if (browser) await browser.close();
         releaseLock();
     }
