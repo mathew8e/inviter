@@ -1118,6 +1118,16 @@ async function openReactionsDialogForReel(page) {
  * two are stacked in a flex column) — walk up from the "Reactions" leaf
  * label until an ancestor's text matches that pattern.
  *
+ * Retries with short waits before giving up — confirmed live (2026-08-05)
+ * that gotoAndSettle's fixed 2s post-navigation wait isn't always long
+ * enough for the stats panel specifically to finish rendering (it can lag
+ * behind the rest of the page, especially on the Pi's slower hardware),
+ * so a caller relying on gotoAndSettle alone got null on nearly every
+ * post during a full-backlog audit even though the page had visibly
+ * loaded. Self-contained here rather than pushing a longer fixed wait
+ * onto every caller of gotoAndSettle (which is also used by the
+ * time-sensitive real invite flow).
+ *
  * Lets a post's stored reactionsCount be compared across checks over
  * time, to tell whether newly-found un-invited reactors on a recheck are
  * genuinely NEW people (reaction count grew) or ones the tool missed
@@ -1127,24 +1137,30 @@ async function openReactionsDialogForReel(page) {
  * @returns {Promise<number|null>} the reaction count, or null if not found
  */
 async function extractReactionsCount(page) {
-    try {
-        return await page.evaluate(() => {
-            for (const el of document.querySelectorAll("*")) {
-                if ((el.textContent || "").trim() !== "Reactions" || el.children.length > 0) continue;
-                let node = el.parentElement;
-                for (let i = 0; i < 6 && node; i++) {
-                    const full = (node.textContent || "").trim();
-                    const m = full.match(/^([\d,]+)Reactions$/);
-                    if (m) return parseInt(m[1].replace(/,/g, ""), 10);
-                    node = node.parentElement;
+    const attemptDelaysMs = [0, 1500, 3000];
+    for (const delay of attemptDelaysMs) {
+        if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+        try {
+            const count = await page.evaluate(() => {
+                for (const el of document.querySelectorAll("*")) {
+                    if ((el.textContent || "").trim() !== "Reactions" || el.children.length > 0) continue;
+                    let node = el.parentElement;
+                    for (let i = 0; i < 6 && node; i++) {
+                        const full = (node.textContent || "").trim();
+                        const m = full.match(/^([\d,]+)Reactions$/);
+                        if (m) return parseInt(m[1].replace(/,/g, ""), 10);
+                        node = node.parentElement;
+                    }
                 }
-            }
+                return null;
+            });
+            if (count !== null) return count;
+        } catch (err) {
+            logger.warn("Could not extract reactions count: " + err.message);
             return null;
-        });
-    } catch (err) {
-        logger.warn("Could not extract reactions count: " + err.message);
-        return null;
+        }
     }
+    return null;
 }
 
 // ──────────────────────────────────────────────
