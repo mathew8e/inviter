@@ -308,6 +308,7 @@ const SORT_GETTERS = {
     type: (p) => contentTypeLabel(p.contentType),
     status: (p) => p.status || "",
     invited: (p) => p.totalInvited || 0,
+    reactions: (p) => (p.reactionsCount == null ? -1 : p.reactionsCount),
     runs: (p) => p.runs.length || 0,
     processed: (p) => p.processedAt || 0,
 };
@@ -504,13 +505,14 @@ function renderPage(data, query = {}) {
     }
     table.posts > tbody > tr.post-row td { border: none; padding: 3px 0; display: block; }
     table.posts td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 11px; display: block; }
-    table.posts > tbody > tr.post-row td:nth-child(1) { grid-row: 1 / 4; grid-column: 1; }
+    table.posts > tbody > tr.post-row td:nth-child(1) { grid-row: 1 / 5; grid-column: 1; }
     table.posts > tbody > tr.post-row td:nth-child(2) { grid-column: 2; }
     table.posts > tbody > tr.post-row td:nth-child(3) { grid-column: 3; text-align: right; }
     table.posts > tbody > tr.post-row td:nth-child(4) { grid-column: 2; }
     table.posts > tbody > tr.post-row td:nth-child(5) { grid-column: 3; text-align: right; }
     table.posts > tbody > tr.post-row td:nth-child(6) { grid-column: 2; }
-    table.posts > tbody > tr.post-row td:nth-child(7) { grid-column: 2 / 4; margin-top: 4px; }
+    table.posts > tbody > tr.post-row td:nth-child(7) { grid-column: 3; text-align: right; }
+    table.posts > tbody > tr.post-row td:nth-child(8) { grid-column: 2 / 4; margin-top: 4px; }
     table.posts > tbody > tr.detail-row td { display: block; }
   }
 </style>
@@ -591,6 +593,7 @@ function renderPage(data, query = {}) {
           <th>${sortLink("type", "Typ")}</th>
           <th>${sortLink("status", "Stav")}</th>
           <th>${sortLink("invited", "Pozváno")}</th>
+          <th>${sortLink("reactions", "Reakce")}</th>
           <th>${sortLink("runs", "Běhy")}</th>
           <th>Odkaz</th>
         </tr>
@@ -603,11 +606,12 @@ function renderPage(data, query = {}) {
           <td data-label="Typ">${esc(contentTypeLabel(p.contentType))}</td>
           <td data-label="Stav">${statusBadge(p.status)}</td>
           <td data-label="Pozváno">${p.totalInvited}</td>
+          <td data-label="Reakce">${p.reactionsCount == null ? "—" : p.reactionsCount}</td>
           <td data-label="Běhy">${p.runs.length}</td>
           <td data-label="Odkaz">${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">Zobrazit na Facebooku ↗</a>` : "—"}</td>
         </tr>
         <tr class="detail-row" id="detail-${i}" style="display:none;">
-          <td colspan="7">
+          <td colspan="8">
             ${p.runs.length === 0 ? '<span class="empty">Pro tento příspěvek zatím nejsou zaznamenány žádné běhy.</span>' : `
             <div class="sub-table-wrap">
             <table>
