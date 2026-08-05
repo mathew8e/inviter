@@ -1106,6 +1106,207 @@ async function openReactionsDialogForReel(page) {
 }
 
 // ──────────────────────────────────────────────
+// extractReactionsCount
+// ──────────────────────────────────────────────
+
+/**
+ * Reads the total reaction count shown on a post's Insights page (the
+ * stat card labeled "Reactions", distinct from "Engagement" which also
+ * folds in comments/shares). Confirmed live (2026-08-05): the label and
+ * number are separate sibling elements inside a shared ancestor whose
+ * combined textContent reads like "47Reactions" (no separator, since the
+ * two are stacked in a flex column) — walk up from the "Reactions" leaf
+ * label until an ancestor's text matches that pattern.
+ *
+ * Lets a post's stored reactionsCount be compared across checks over
+ * time, to tell whether newly-found un-invited reactors on a recheck are
+ * genuinely NEW people (reaction count grew) or ones the tool missed
+ * earlier (count didn't grow, but invitedCount did).
+ *
+ * @param {import('puppeteer').Page} page
+ * @returns {Promise<number|null>} the reaction count, or null if not found
+ */
+async function extractReactionsCount(page) {
+    try {
+        return await page.evaluate(() => {
+            for (const el of document.querySelectorAll("*")) {
+                if ((el.textContent || "").trim() !== "Reactions" || el.children.length > 0) continue;
+                let node = el.parentElement;
+                for (let i = 0; i < 6 && node; i++) {
+                    const full = (node.textContent || "").trim();
+                    const m = full.match(/^([\d,]+)Reactions$/);
+                    if (m) return parseInt(m[1].replace(/,/g, ""), 10);
+                    node = node.parentElement;
+                }
+            }
+            return null;
+        });
+    } catch (err) {
+        logger.warn("Could not extract reactions count: " + err.message);
+        return null;
+    }
+}
+
+// ──────────────────────────────────────────────
+// countUninvitedReactors — fast read-only audit
+// ──────────────────────────────────────────────
+
+/**
+ * Scrolls a post's already-open reactions dialog as fast as reasonably
+ * possible WITHOUT clicking anything, counting distinct people who still
+ * show an Invite/Pozvat button (plus every distinct reactor seen, for
+ * cross-checking against extractReactionsCount()). Uses the same stable
+ * profile-link identifier as scrollAndInvite so Facebook's virtualized
+ * list recycling can't cause double-counting, and the same double-
+ * confirmation end-of-list concept scrollAndInvite uses — but with much
+ * shorter cooldowns (this is a diagnostic tool re-run often, not the real
+ * invite flow where an undercount means genuinely lost invites).
+ *
+ * @param {import('puppeteer').Page} page
+ * @param {Array<string>} [selectors]
+ * @returns {Promise<{uninvitedCount: number, totalReactorsSeen: number, scrolls: number}>}
+ */
+async function countUninvitedReactors(page, selectors = INVITE_SELECTORS) {
+    const selectorStr = selectors.join(", ");
+    const uninvited = new Set();
+    const allSeen = new Set();
+    let scrollsWithoutNew = 0;
+    let totalScrolls = 0;
+    let endOfListConfirmations = 0;
+    const REQUIRED_END_OF_LIST_CONFIRMATIONS = 2;
+    const MAX_SCROLLS_WITHOUT_NEW = 500; // safety net only
+    const SCROLL_DELAY = 400;
+    const COOLDOWN_MS = 3000; // short — diagnostic tool, not the real invite flow
+
+    const getScrollHeight = () => page.evaluate(() => {
+        const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter((d) => {
+            const s = window.getComputedStyle(d);
+            return s.display !== "none" && s.visibility !== "hidden";
+        });
+        for (const dialog of open) {
+            const scrollables = Array.from(dialog.querySelectorAll("*"))
+                .filter((el) => {
+                    const s = window.getComputedStyle(el);
+                    return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
+                })
+                .sort((a, b) => b.scrollHeight - a.scrollHeight);
+            if (scrollables.length > 0) return scrollables[0].scrollHeight;
+        }
+        return 0;
+    });
+
+    while (scrollsWithoutNew < MAX_SCROLLS_WITHOUT_NEW) {
+        totalScrolls++;
+        const found = await page.evaluate((selStr) => {
+            function getPersonId(el) {
+                let node = el.parentElement;
+                for (let i = 0; i < 8 && node; i++) {
+                    const a = node.querySelector("a[href]");
+                    if (a) {
+                        const href = a.getAttribute("href") || "";
+                        if (href) {
+                            try {
+                                const url = new URL(href, "https://www.facebook.com");
+                                if (url.pathname === "/profile.php" && url.searchParams.has("id")) {
+                                    return url.pathname + "?id=" + url.searchParams.get("id");
+                                }
+                                return url.origin + url.pathname;
+                            } catch (e) {
+                                return href.split("?")[0].split("#")[0];
+                            }
+                        }
+                    }
+                    node = node.parentElement;
+                }
+                return (node || el).textContent.trim().slice(0, 80);
+            }
+            const roots = (function () {
+                const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter((d) => {
+                    const s = window.getComputedStyle(d);
+                    return s.display !== "none" && s.visibility !== "hidden";
+                });
+                return open.length > 0 ? open : [document.body];
+            })();
+            const ids = [];
+            for (const root of roots) {
+                for (const el of root.querySelectorAll(selStr)) {
+                    if (el.getAttribute("aria-disabled") === "true") continue;
+                    ids.push(getPersonId(el));
+                }
+            }
+            const seen = [];
+            for (const root of roots) {
+                const scrollables = Array.from(root.querySelectorAll("*")).filter((el) => {
+                    const s = window.getComputedStyle(el);
+                    return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
+                }).sort((a, b) => b.scrollHeight - a.scrollHeight);
+                const container = scrollables[0] || root;
+                for (const a of container.querySelectorAll("a[href]")) {
+                    const href = a.getAttribute("href") || "";
+                    if (href && href !== "#" && !href.startsWith("javascript:")) {
+                        try {
+                            const url = new URL(href, "https://www.facebook.com");
+                            if (url.pathname === "/profile.php" && url.searchParams.has("id")) {
+                                seen.push(url.pathname + "?id=" + url.searchParams.get("id"));
+                            } else {
+                                seen.push(url.origin + url.pathname);
+                            }
+                        } catch (e) {
+                            seen.push(href.split("?")[0].split("#")[0]);
+                        }
+                    }
+                }
+            }
+            return { ids, seen };
+        }, selectorStr);
+
+        const before = uninvited.size;
+        for (const id of found.ids) uninvited.add(id);
+        for (const id of found.seen) allSeen.add(id);
+        scrollsWithoutNew = uninvited.size === before ? scrollsWithoutNew + 1 : 0;
+
+        const heightBefore = await getScrollHeight();
+        const scrollResult = await page.evaluate(() => {
+            const open = Array.from(document.querySelectorAll('[role="dialog"]')).filter((d) => {
+                const s = window.getComputedStyle(d);
+                return s.display !== "none" && s.visibility !== "hidden";
+            });
+            for (const dialog of open) {
+                const scrollables = Array.from(dialog.querySelectorAll("*")).filter((el) => {
+                    const s = window.getComputedStyle(el);
+                    return s.overflowY === "scroll" || s.overflowY === "auto" || el.scrollHeight > el.clientHeight + 10;
+                });
+                if (scrollables.length === 0) continue;
+                scrollables.sort((a, b) => b.scrollHeight - a.scrollHeight);
+                const c = scrollables[0];
+                c.scrollBy(0, c.clientHeight * 0.5);
+                const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 20;
+                return { atBottom };
+            }
+            return { atBottom: true };
+        });
+
+        await new Promise((r) => setTimeout(r, SCROLL_DELAY));
+
+        if (scrollResult.atBottom) {
+            const heightAfter = await getScrollHeight();
+            if (heightAfter > heightBefore) {
+                endOfListConfirmations = 0;
+                continue;
+            }
+            endOfListConfirmations++;
+            if (endOfListConfirmations < REQUIRED_END_OF_LIST_CONFIRMATIONS) {
+                await new Promise((r) => setTimeout(r, COOLDOWN_MS));
+                continue;
+            }
+            break;
+        }
+    }
+
+    return { uninvitedCount: uninvited.size, totalReactorsSeen: allSeen.size, scrolls: totalScrolls };
+}
+
+// ──────────────────────────────────────────────
 // processPost — convenience orchestrator
 // ──────────────────────────────────────────────
 
@@ -1195,6 +1396,8 @@ module.exports = {
     findScrollableContainer,
     scrollAndInvite,
     closeReactionsDialog,
+    extractReactionsCount,
+    countUninvitedReactors,
 
     // Convenience
     processPost,
