@@ -246,6 +246,10 @@ const config = Object.freeze({
         process.env.RATE_LIMIT_PATH ||
         path.join(DATA_DIR, "rate-limit-state.json"),
     lockFilePath: path.join(DATA_DIR, "inviter.lock"),
+    // Manual "do not run" marker — checked by the dashboard to show a
+    // clear paused banner, independent of whether cron/scripts are
+    // actually disabled elsewhere. See dashboard.js's readPauseState().
+    pauseStatePath: path.join(DATA_DIR, "paused.json"),
     screenshotsDir:
         process.env.SCREENSHOTS_DIR || path.join(DATA_DIR, "screenshots"),
     // Single file, overwritten every tick — a cheap near-live view of what

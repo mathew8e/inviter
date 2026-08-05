@@ -38,6 +38,28 @@ function isRunActive() {
     return fs.existsSync(config.lockFilePath);
 }
 
+/**
+ * Reads the manual "do not run" marker, if present. Written by hand (not
+ * by any automation) when the tool needs to stay off for a while — e.g.
+ * confirmed live 2026-08-05: a Facebook rate-limit block meant cron had
+ * to be disabled and nothing should restart until it clears. The lock
+ * file alone doesn't communicate this — it just looks like "idle,
+ * nothing happening right now" to a non-technical reader, indistinguishable
+ * from a normal between-runs gap.
+ *
+ * @returns {{reason: string, resumeAfter: number|null}|null}
+ */
+function readPauseState() {
+    try {
+        if (!fs.existsSync(config.pauseStatePath)) return null;
+        const raw = JSON.parse(fs.readFileSync(config.pauseStatePath, "utf8"));
+        if (typeof raw.reason !== "string") return null;
+        return { reason: raw.reason, resumeAfter: raw.resumeAfter || null };
+    } catch (err) {
+        return null;
+    }
+}
+
 function getLiveLogLines(maxLines = 150) {
     const liveLogPath = path.join(config.logsDir, "latest.log");
     if (!fs.existsSync(liveLogPath)) return [];
@@ -191,8 +213,11 @@ function gatherStatus() {
     // comment for why the history log alone would undercount.
     const totalInvitedAllTime = posts.reduce((sum, p) => sum + (p.invitedCount || 0), 0);
 
+    const pauseState = readPauseState();
     return {
         runActive: isRunActive(),
+        paused: !!pauseState,
+        pauseReason: pauseState ? pauseState.reason : null,
         rateState,
         postsByStatus,
         totalInvitedAllTime,
@@ -363,8 +388,15 @@ function renderPage(data, query = {}) {
     // "is this working and when will it be done" (2026-07-22).
     const pendingCount = data.postsByStatus.pending || 0;
     const nextRunMin = minutesUntilNextRun();
+    const pauseState = readPauseState();
     let nowSentence;
-    if (data.runActive) {
+    let etaSentence = "";
+    if (pauseState) {
+        nowSentence = `⏸ Pozastaveno — ${pauseState.reason}. Nic se teď automaticky nespouští.`;
+        etaSentence = pauseState.resumeAfter
+            ? `Znovu spustím ručně nejdřív ${fmtTime(pauseState.resumeAfter)}.`
+            : "";
+    } else if (data.runActive) {
         nowSentence = "Právě pracuje — prochází příspěvky a hledá lidi k pozvání.";
     } else if (pendingCount > 0) {
         nowSentence = `Momentálně neběží. Čeká ${pendingCount} nezpracovaných příspěvků — příští automatické spuštění za ${fmtMinutes(nextRunMin)}.`;
@@ -372,12 +404,11 @@ function renderPage(data, query = {}) {
         nowSentence = `Momentálně neběží — všechny příspěvky jsou zpracované. Příští kontrola nových příspěvků za ${fmtMinutes(nextRunMin)}.`;
     }
 
-    let etaSentence = "";
-    if (pendingCount > 0 && data.postsLastHour > 0) {
+    if (!pauseState && pendingCount > 0 && data.postsLastHour > 0) {
         const etaHours = pendingCount / data.postsLastHour;
         const etaText = etaHours < 1 ? fmtMinutes(Math.round(etaHours * 60)) : `${etaHours.toFixed(1)} h`;
         etaSentence = `Za poslední hodinu zpracováno ${data.postsLastHour} příspěvků. Při tomto tempu zbývajících ${pendingCount} bude hotovo přibližně za ${etaText}.`;
-    } else if (pendingCount > 0) {
+    } else if (!pauseState && pendingCount > 0) {
         etaSentence = `Zbývá ${pendingCount} příspěvků, zatím bez dostatečné aktivity pro odhad času.`;
     }
 
@@ -426,6 +457,7 @@ function renderPage(data, query = {}) {
   .status-live { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
   .pulse-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); position: relative; flex-shrink: 0; }
   .pulse-dot.active { background: var(--accent); }
+  .pulse-dot.paused { background: var(--warn); }
   .pulse-dot.active::after {
     content: ""; position: absolute; inset: -6px; border-radius: 50%; border: 2px solid var(--accent); opacity: .6;
     animation: pulse-ring 1.8s ease-out infinite;
@@ -522,8 +554,8 @@ function renderPage(data, query = {}) {
   <header class="topbar">
     <h1>Inviter — Přehled</h1>
     <div class="status-live">
-      <span id="pulse-dot" class="pulse-dot${data.runActive ? " active" : ""}"></span>
-      <span id="status-label">${data.runActive ? "Právě pracuje" : "Čeká na další spuštění"}</span>
+      <span id="pulse-dot" class="pulse-dot${pauseState ? " paused" : (data.runActive ? " active" : "")}"></span>
+      <span id="status-label">${pauseState ? "Pozastaveno" : (data.runActive ? "Právě pracuje" : "Čeká na další spuštění")}</span>
     </div>
   </header>
 
@@ -674,8 +706,8 @@ function renderPage(data, query = {}) {
         const res = await fetch("/api/status");
         const s = await res.json();
         const dot = document.getElementById("pulse-dot");
-        dot.className = "pulse-dot" + (s.runActive ? " active" : "");
-        document.getElementById("status-label").textContent = s.runActive ? "Právě pracuje" : "Čeká na další spuštění";
+        dot.className = "pulse-dot" + (s.paused ? " paused" : (s.runActive ? " active" : ""));
+        document.getElementById("status-label").textContent = s.paused ? "Pozastaveno" : (s.runActive ? "Právě pracuje" : "Čeká na další spuštění");
         document.getElementById("stat-budget").textContent = s.rateState.invitesToday + " / " + s.rateState.dailyLimit;
         const pct = Math.min(100, Math.round((s.rateState.invitesToday / (s.rateState.dailyLimit || 1)) * 100));
         document.getElementById("stat-budget-bar").style.width = pct + "%";
