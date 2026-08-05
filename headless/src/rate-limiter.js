@@ -26,9 +26,18 @@ const RATE_LIMIT_PATTERNS = [
     /you are doing that too much/i,
     /rate limit exceeded/i,
     /blocked temporarily/i,
+    /temporarily blocked/i, // confirmed live 2026-08-05: FB's actual wording
+    // ("You're Temporarily Blocked... misusing this feature by going too
+    // fast") wasn't matched by any existing pattern — "blocked temporarily"
+    // only catches the reverse word order, and "you have been" doesn't
+    // match the "you've been" contraction FB actually used. This ran
+    // silently undetected during manual visible browsing; had it happened
+    // mid-automated-run, the system would have kept going against an
+    // already-blocked account instead of stopping.
+    /you'?(ve| have) been temporarily blocked/i,
+    /misusing this feature/i,
     /this action is temporarily blocked/i,
     /please try again later/i,
-    /you have been temporarily blocked/i,
     /slow down/i,
     /too many requests/i,
     // Czech
