@@ -239,6 +239,51 @@ async function openReactionsDialog(page) {
                 });
 
                 if (dialogVisible) {
+                    // Confirmed live (2026-08-06) by the page owner: whenever
+                    // the strategies above land on the "FILTERED fallback"
+                    // path (or any other non-"All reactions" entry point),
+                    // the dialog that opens only lists people who reacted
+                    // with THAT ONE reaction type — someone who reacted with
+                    // e.g. Haha or Love is invisible if the dialog opened on
+                    // "Like". This was previously treated as a full success
+                    // the moment ANY [role="dialog"] appeared, with no check
+                    // for which reaction type it was scoped to — likely
+                    // responsible for a large share of the "still missing
+                    // people on already-done posts" reports throughout this
+                    // project. The dialog itself usually has an "All"/"Vše"
+                    // tab alongside the per-reaction-type ones (confirmed via
+                    // an earlier live screenshot: "All | 👍1.2K | 😆417 |
+                    // 😡77") — click it here as a correctness safeguard
+                    // regardless of which strategy opened the dialog, so a
+                    // filtered entry point still ends up on the complete
+                    // list. NOT yet verified live against a real filtered
+                    // dialog (Facebook account is under a rate-limit block
+                    // as of this fix — see PLAN.md/dashboard pause banner);
+                    // needs confirmation once that lifts.
+                    const switchedToAll = await page.evaluate(() => {
+                        const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter((d) => {
+                            const s = window.getComputedStyle(d);
+                            return s.display !== "none" && s.visibility !== "hidden";
+                        });
+                        for (const dialog of dialogs) {
+                            const candidates = dialog.querySelectorAll('[role="tab"], div[role="button"], span[role="button"]');
+                            for (const el of candidates) {
+                                const text = (el.textContent || "").trim();
+                                if (text === "All" || text === "Vše") {
+                                    el.click();
+                                    return true;
+                                }
+                            }
+                        }
+                        return false;
+                    });
+                    if (switchedToAll) {
+                        logger.info('Clicked "All"/"Vše" tab inside the dialog to ensure the unfiltered list.');
+                        await new Promise((r) => setTimeout(r, 1500));
+                    } else {
+                        logger.info('No separate "All"/"Vše" tab found inside the dialog (may already be unfiltered, or this post has only one reaction type).');
+                    }
+
                     logger.info("Reactions dialog opened successfully.");
                     return true;
                 }
