@@ -1,16 +1,20 @@
 // Quick spot-audit tool: checks ONE post — a random already-"done" one by
 // default, or a specific URL/content_id passed as an argument — for real
 // un-invited reactors, using the exact same accurate scan as every other
-// path (no shortcuts on correctness), just at the fastest safe pace
-// (aggressive rate mode). Built for manually sanity-checking the page
-// owner's suspicion that "done" posts still have missed invites, without
-// having to hunt through the dashboard for a candidate or wait for a full
-// resweep pass to reach it.
+// path (no shortcuts on correctness). Built for manually sanity-checking
+// the page owner's suspicion that "done" posts still have missed invites,
+// without having to hunt through the dashboard for a candidate or wait
+// for a full resweep pass to reach it.
 //
 // Usage:
 //   node spot_check.js                    (random "done" post)
 //   node spot_check.js <post_url_or_id>   (that specific post)
-process.env.RATE_MODE = "aggressive";
+//
+// Rate mode: cautious (2026-08-08, after a real FB rate-limit block — see
+// config.js's cautious mode comment). This can send real invites, so it
+// gets the same conservative pacing as everything else now, not the old
+// aggressive default.
+process.env.RATE_MODE = "cautious";
 
 const puppeteer = require("puppeteer");
 const session = require("./src/session");
