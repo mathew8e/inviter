@@ -73,6 +73,12 @@ function parseLimit() {
             const post = targets[i];
             try {
                 await gotoAndSettle(page, post.url);
+                // Confirmed live (2026-08-05) this tool had no rate-limit
+                // detection at all, unlike every other page-visiting path —
+                // it never clicks Invite, but it should still stop
+                // immediately on any sign of a block rather than keep
+                // navigating through dozens more posts regardless.
+                await rateLimiter.detectRateLimit(page);
                 const reactionsCount = await reactions.extractReactionsCount(page);
 
                 const opened = await reactions.openReactionsDialog(page);
@@ -112,6 +118,14 @@ function parseLimit() {
                 }
             } catch (err) {
                 logger.error(`${i + 1}/${targets.length}: error — ${err.message}`);
+                // Same pattern as inviter.js/resweep_done_posts.js: a
+                // rate-limit detection must stop the whole run immediately,
+                // not just skip this one post and keep navigating through
+                // the rest of the backlog against an already-blocked account.
+                if (err.message.includes("RATE LIMIT DETECTED")) {
+                    logger.warn("Stopping audit early — rate limit detected.");
+                    break;
+                }
             }
         }
 
