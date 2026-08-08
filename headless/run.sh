@@ -11,12 +11,16 @@
 # Usage: ./run.sh [extra CLI flags]  (extra env vars can be set before the
 # call, e.g. DISCOVERY_TIME_CAP_MS=7200000 ./run.sh --dry-run ...)
 cd "$(dirname "$0")"
+# Switched from moderate to cautious (2026-08-08) after a real Facebook
+# rate-limit block — see config.js's cautious rate mode comment. Dropped
+# the PER_POST_MAX_OVERRIDE=420 that used to sit here too: it would have
+# overridden cautious mode's own deliberately-low perPostMax=30 right back
+# up to 420, undoing the point of switching modes.
 exec env \
   PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
   DAILY_MAX_OVERRIDE=1400 \
-  PER_POST_MAX_OVERRIDE=420 \
   node src/index.js \
   --page "https://www.facebook.com/DanielKusPlzen" \
   --profile-dir ./profile \
-  --rate-mode moderate \
+  --rate-mode cautious \
   "$@"

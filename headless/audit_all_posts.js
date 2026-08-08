@@ -13,7 +13,12 @@
 // Usage:
 //   node audit_all_posts.js              (all "done" posts, oldest first)
 //   node audit_all_posts.js --limit 20   (only the first 20)
-process.env.RATE_MODE = "aggressive"; // pacing only; nothing gets clicked
+// This never clicks Invite, so baseDelayMs/randomExtraMs (real-click
+// pacing) don't functionally matter here the way they do for resweep —
+// but during the post-block recovery period (see config.js's cautious
+// mode comment) there's no reason for this to be the one thing still
+// running at the old aggressive pace either, so it matches.
+process.env.RATE_MODE = "cautious";
 
 const puppeteer = require("puppeteer");
 const session = require("./src/session");

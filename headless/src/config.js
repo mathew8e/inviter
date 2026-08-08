@@ -65,6 +65,32 @@ const RATE_MODES = {
         maxPostsPerRun: 20,
         runTimeCapMs: 45 * 60 * 1000,
     },
+    // Confirmed live (2026-08-05): a day running aggressive-mode resweep
+    // (1,500ms between invite clicks) sent 1,166 real invites and the
+    // account got a real Facebook rate-limit block ("misusing this
+    // feature by going too fast") — the "tested 1,400/day without issue"
+    // assumption on dailyMax above turned out to be wrong once volume
+    // stayed high for a sustained stretch, not just a one-off burst.
+    // cautious is a deliberate step change past paranoid, not just a
+    // reuse of it — baseDelayMs/randomExtraMs (what actually paces each
+    // real "Invite" click, the action Facebook's abuse detection would
+    // plausibly watch) roughly triples paranoid's. dailyMax stays at what
+    // the page owner wants preserved (1,400) since the sheer BACKLOG size
+    // (tens of thousands of posts still needing a check) already means
+    // this takes weeks regardless of per-invite pacing — there's no real
+    // cost to being much more conservative on the one dial that matters
+    // for account risk.
+    cautious: {
+        dailyMax: 1400,
+        perPostMax: 30,
+        baseDelayMs: 12000,
+        randomExtraMs: 12000,
+        scrollDelayMs: 300,
+        postCooldownMs: 60000,
+        errorCooldownHours: 72,
+        maxPostsPerRun: 10,
+        runTimeCapMs: 60 * 60 * 1000,
+    },
 };
 
 // ──────────────────────────────────────────────
@@ -86,9 +112,12 @@ const rateMode = { ...RATE_MODES[rateModeName] };
 // have been carefully tuned for accuracy, whereas the volume caps are just
 // "how much is this specific account's reputation known to tolerate."
 // Confirmed with the page owner (2026-07-04): routinely sends 500/day
-// manually, tested 1,400/day without issue — far above the generic
-// paranoid/moderate/aggressive guesses, which were conservative estimates
-// made with zero account history to go on.
+// manually, and 1,400/day ran without issue on a one-off basis — but
+// confirmed live (2026-08-05) that sustained high volume over a full day
+// (aggressive mode, 1,166 real invites) DID eventually trigger a real
+// rate-limit block. The daily NUMBER alone wasn't the whole story — see
+// the cautious rate mode above, which keeps dailyMax at 1,400 but paces
+// each individual invite far more conservatively.
 if (process.env.DAILY_MAX_OVERRIDE) {
     rateMode.dailyMax = parseInt(process.env.DAILY_MAX_OVERRIDE, 10);
 }

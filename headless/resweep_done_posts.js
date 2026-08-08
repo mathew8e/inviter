@@ -1,16 +1,24 @@
 // One-off sweep: re-scans every non-story backlog post — "done" AND
-// "pending" alike — at the fastest safe pacing (aggressive rate mode).
-// Confirmed live (2026-08-04): limiting this to "done" posts only left a
-// large chunk of the backlog (228 posts, 190 of them 30+ days old, some
-// already sitting on hundreds of recorded invites) permanently excluded
-// from the resweep — they'd been interrupted mid-scan at some point
-// (post_time_cap/error_mid_scan/etc, all correctly left "pending" for a
-// retry) and were only ever getting the slower moderate-mode cron pace to
-// clear, never this tool's faster aggressive settings. Reuses the exact
-// same building blocks as the normal cron flow (auth, gotoAndSettle,
-// processPost, rate limiter) for one long-lived browser session across
-// the whole backlog, instead of relaunching Chrome per post.
-process.env.RATE_MODE = "aggressive";
+// "pending" alike. Confirmed live (2026-08-04): limiting this to "done"
+// posts only left a large chunk of the backlog (228 posts, 190 of them
+// 30+ days old, some already sitting on hundreds of recorded invites)
+// permanently excluded from the resweep — they'd been interrupted
+// mid-scan at some point (post_time_cap/error_mid_scan/etc, all correctly
+// left "pending" for a retry) and were only ever getting the slower
+// moderate-mode cron pace to clear, never this tool's faster settings.
+// Reuses the exact same building blocks as the normal cron flow (auth,
+// gotoAndSettle, processPost, rate limiter) for one long-lived browser
+// session across the whole backlog, instead of relaunching Chrome per
+// post.
+//
+// Switched from "aggressive" to "cautious" (2026-08-08): running this at
+// aggressive pacing (1,500ms between invite clicks) for a full day sent
+// 1,166 real invites and triggered a real Facebook rate-limit block — see
+// config.js's cautious rate mode comment for the full reasoning. The
+// backlog is large enough that dailyMax (still 1,400, via override) is
+// the actual bottleneck either way, so there's no real cost to pacing
+// each individual invite far more conservatively.
+process.env.RATE_MODE = "cautious";
 
 const puppeteer = require("puppeteer");
 const session = require("./src/session");
